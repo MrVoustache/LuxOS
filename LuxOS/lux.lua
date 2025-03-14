@@ -45,7 +45,7 @@ function lux.make_tick()
     end
 end
 
-lux.INSTALLER_CODE = "BKahgBKz"
+lux.INSTALLER_CODE = "68i8QBxE"
 
 
 
