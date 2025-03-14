@@ -2,6 +2,13 @@ local DIRECTORY = 1
 local FILE = 2
 local ENTRY_POINT = "LuxOS/main.lua"
 
+local function print_color(color, ...)
+    local old_color = term.getTextColor()
+    term.setTextColor(color)
+    print(...)
+    term.setTextColor(old_color)
+end
+
 local package = {
 	name = "LuxOS",
 	type = DIRECTORY,
@@ -79,13 +86,18 @@ local package = {
 					name = "routine.lua",
 					type = FILE,
 					code = 9
+				},
+				{
+					name = "shell.lua",
+					type = FILE,
+					code = 10
 				}
 			}
 		},
 		{
 			name = "main.lua",
 			type = FILE,
-			code = 10
+			code = 11
 		},
 		{
 			name = "processes",
@@ -94,7 +106,7 @@ local package = {
 				{
 					name = "lib.lua",
 					type = FILE,
-					code = 11
+					code = 12
 				}
 			}
 		},
@@ -105,22 +117,43 @@ local package = {
 				{
 					name = "lib.lua",
 					type = FILE,
-					code = 12
+					code = 13
 				},
 				{
 					name = "routine.lua",
 					type = FILE,
-					code = 13
+					code = 14
+				}
+			}
+		},
+		{
+			name = "standart_library",
+			type = DIRECTORY,
+			children = {
+				{
+					name = "app.lua",
+					type = FILE,
+					code = 15
+				},
+				{
+					name = "lib.lua",
+					type = FILE,
+					code = 16
+				},
+				{
+					name = "path.lua",
+					type = FILE,
+					code = 17
 				}
 			}
 		},
 		{
 			name = "syscall.lua",
 			type = FILE,
-			code = 14
+			code = 18
 		}
 	}
-}
+}              -- This is actually a Python format variable.
 
 local raw_package = {
 [[--]].."[["..[[
@@ -752,6 +785,8 @@ function kernel.check_kernel_space_before_running()
     end
 end
 
+local check_kernel_space_before_running = kernel.check_kernel_space_before_running
+
 
 local current_coroutine = coroutine.running
 
@@ -766,7 +801,7 @@ end
 ---Makes a coroutine a kernel coroutine.
 ---@param coro thread
 function kernel.promote_coroutine(coro)
-    kernel.check_kernel_space_before_running()
+    check_kernel_space_before_running()
     local current_coroutine = current_coroutine()
     kernel_coroutines[coro] = current_coroutine
 end
@@ -779,7 +814,7 @@ end
 ---@param message string The message to print on the purple screen.
 ---@param level integer? The stacktrace level to trace the error back to. Default (0) is the the line where panic was called, 1 is where the function that called panic was called, etc.
 function kernel.panic(message, level)
-    kernel.check_kernel_space_before_running()
+    check_kernel_space_before_running()
     if level == nil then
         level = 0
     end
@@ -811,7 +846,7 @@ end
 ---@param ... any The arguments to call the function with.
 ---@return R func_return The return value(s) of the function.
 function kernel.panic_pcall(func_name, func, ...)
-    kernel.check_kernel_space_before_running()
+    check_kernel_space_before_running()
     local res = {pcall(func, ...)}
     if not res[1] then
         kernel.panic("Error while calling the function '"..tostring(func_name).."':\n"..tostring(res[2]), 1)
@@ -829,7 +864,7 @@ end
 ---@param ... P The arguments to pass to the function.
 ---@return R func_return The return value(s) of the function
 function kernel.run_function_in_user_space(func, ...)
-    kernel.check_kernel_space_before_running()
+    check_kernel_space_before_running()
     local coro = coroutine.create(func)
     local res = {coroutine.resume(coro, ...)}
     local ok, err = res[1], res[2]
@@ -862,7 +897,7 @@ local private_event = {}        ---@type {[string] : string}
 ---@param name string The name of the coroutine.
 ---@param coro thread The coroutine object itself.
 function kernel.register_routine(name, coro)
-    kernel.check_kernel_space_before_running()
+    check_kernel_space_before_running()
     kernel.promote_coroutine(coro)
     for iname, icoro in pairs(routine_coroutines) do
         if name == iname then
@@ -877,7 +912,7 @@ end
 ---Sets the name of the currently running routine.
 ---@param name string? The name of the current routine.
 function kernel.set_current_routine(name)
-    kernel.check_kernel_space_before_running()
+    check_kernel_space_before_running()
     current_routine = name
 end
 
@@ -895,14 +930,14 @@ end
 ---Returns a dictionnary of all the existing routines.
 ---@return { [string]: thread } routines The existing routine, indexed by names.
 function kernel.routines()
-    kernel.check_kernel_space_before_running()
+    check_kernel_space_before_running()
     return routine_coroutines
 end
 
 ---Registers an event as private to the currently running routine.
 ---@param event_name string The name of the event to make private.
 function kernel.make_event_private(event_name)
-    kernel.check_kernel_space_before_running()
+    check_kernel_space_before_running()
     if private_event[event_name] ~= nil then
         kernel.panic("Event '"..event_name.."' is already private to routine '"..private_event[event_name].."'.")
     end
@@ -913,7 +948,7 @@ end
 ---@param event_name string The name of the event to get the routines for.
 ---@return {[string] : thread} routines The routines to run for the event.
 function kernel.get_routines_for_event(event_name)
-    kernel.check_kernel_space_before_running()
+    check_kernel_space_before_running()
     if private_event[event_name] ~= nil then
         return {[private_event[event_name]].."]]"..[[ = routine_coroutines[private_event[event_name]].."]]"..[[}
     else
@@ -924,7 +959,7 @@ end
 ---Marks the currently running routine as ready to start LuxOS.
 ---@param halt boolean? If true (default), waits until all the other routines are ready to start.
 function kernel.mark_routine_ready(halt)
-    kernel.check_kernel_space_before_running()
+    check_kernel_space_before_running()
     if halt == nil then
         halt = true
     end
@@ -953,7 +988,7 @@ end
 ---@param event_name string The name of the event to get the routines for.
 ---@return {[string] : thread} not_ready The routines' coroutines to run to finish startup.
 function kernel.starting_routines(event_name)
-    kernel.check_kernel_space_before_running()
+    check_kernel_space_before_running()
     if private_event[event_name] ~= nil and not routines_ready[private_event[event_name]].."]]"..[[ then
         return {[private_event[event_name]].."]]"..[[ = routine_coroutines[private_event[event_name]].."]]"..[[}
     end
@@ -969,7 +1004,7 @@ end
 ---Marks the currently running routine as offline and ready for shutdown.
 ---@param halt boolean? If true (default), this function will halt forever, awaiting shutdown.
 function kernel.mark_routine_offline(halt)
-    kernel.check_kernel_space_before_running()
+    check_kernel_space_before_running()
     if halt == nil then
         halt = true
     end
@@ -1000,7 +1035,7 @@ end
 ---@param event_name string The name of the event to get the routines for.
 ---@return {[string] : thread} not_ready The routines' coroutines to run to finish shutdown.
 function kernel.disconnecting_routines(event_name)
-    kernel.check_kernel_space_before_running()
+    check_kernel_space_before_running()
     if private_event[event_name] ~= nil and not routines_offline[private_event[event_name]].."]]"..[[ then
         return {[private_event[event_name]].."]]"..[[ = routine_coroutines[private_event[event_name]].."]]"..[[}
     end
@@ -1027,7 +1062,7 @@ end
 
 ---Initializes kernel shutdown. Should only be called once.
 function kernel.initialize_shutdown()
-    kernel.check_kernel_space_before_running()
+    check_kernel_space_before_running()
     if SHUTTING_DOWN then
         kernel.panic("Shutdown has already been initialized.", 1)
     end
@@ -1077,7 +1112,7 @@ kernel.DIRECTORY = {
 ---Creates a new node for a file system structure tree.
 ---@param obj {name : string, type : FS_Node_type, mode : FileModes | DirectoryModes ?, children : FS_Node[]?}
 function FS_Node:new(obj)
-    kernel.check_kernel_space_before_running()
+    check_kernel_space_before_running()
     local fs_struct = obj or {}
     setmetatable(fs_struct, self)
     if type(fs_struct.name) ~= "string" then
@@ -1130,7 +1165,7 @@ end
 ---Creates a new filesystem structure tree, starting from the root.
 ---@param root_items {children : FS_Node[]}
 function kernel.filesystem_structure(root_items)
-    kernel.check_kernel_space_before_running()
+    check_kernel_space_before_running()
     return FS_Node:new{
         name = "",
         type = kernel.DIRECTORY,
@@ -1142,7 +1177,7 @@ end
 ---@param node {name : string, type : FS_Node_type, mode : FileModes | DirectoryModes ?, children : FS_Node[]?} A table hodling the required information about the node.
 ---@return FS_Node node The new filesystem node.
 function kernel.filesystem_node(node)
-    kernel.check_kernel_space_before_running()
+    check_kernel_space_before_running()
     return FS_Node:new(node)
 end
 
@@ -1185,7 +1220,7 @@ end
 ]].."]]"..[[
 ---@param structure FS_Node The structure. A FS_Node object.
 function kernel.validate_filesystem_structure(structure)
-    kernel.check_kernel_space_before_running()
+    check_kernel_space_before_running()
 
     ---Inner recursive structure checker
     ---@param sub_structure FS_Node Directory to check.
@@ -1476,6 +1511,8 @@ _G.luxnet = {}      -- The LuxNet API. Allows you to communicate with other mach
 luxnet.LUXNET_PORT = 42      -- The port that LuxNet uses to communicate with other machines.
 luxnet.BROADCAST_ID = -1     -- The ID that represents a broadcast message. This is used to send messages to all machines.
 
+local check_kernel_space_before_running = kernel.check_kernel_space_before_running
+
 
 
 
@@ -1487,6 +1524,7 @@ luxnet.BROADCAST_ID = -1     -- The ID that represents a broadcast message. This
 ---@field protocol string | nil The protocol used to send the message.
 ---@field identifier integer A unique identifier for the message.
 ---@field jumps integer The amount of jumps the message has done to reach the receiver.
+---@field time_to_live integer The maximum number of jumps the message can do. Can be infinite.
 ---@field distance number The distance that the message has traveled.
 ---@field time_sent number The time when the message was sent.
 ---@field time_received number The time when the message was received.
@@ -1497,11 +1535,10 @@ Message.__index = Message
 Message.__name = "Message"
 
 
----Creates a new message object. Can only be called from kernel space.
----@param message {["sender"]: integer, ["receiver"]: integer, ["message"]: table | string | number | boolean | nil, ["protocol"]: string | nil, ["identifier"]: integer, ["jumps"]: integer, ["distance"]: number, ["time_sent"]: number, ["time_received"]: number} The required parameters for creating a message.
+---Creates a new Message object.
+---@param message {["sender"]: integer, ["receiver"]: integer, ["message"]: table | string | number | boolean | nil, ["protocol"]: string | nil, ["identifier"]: integer, ["jumps"]: integer, ["time_to_live"]: integer, ["distance"]: number, ["time_sent"]: number, ["time_received"]: number} The required parameters for creating a message.
 ---@return Message message The new message object.
 function Message:new(message)
-    kernel.check_kernel_space_before_running()
     setmetatable(message, self)
     return message
 end
@@ -1523,11 +1560,10 @@ Response.__index = Response
 Response.__name = "Response"
 
 
----Creates a new response object. Can only be called from kernel space.
+---Creates a new Response object. Can only be called from kernel space.
 ---@param response {["sender"]: integer, ["receiver"]: integer, ["identifier"]: integer, ["jumps"]: integer, ["distance"]: number, ["time_sent"]: number, ["time_received"]: number} The required parameters for creating a response.
 ---@return Response response The new response object.
 function Response:new(response)
-    kernel.check_kernel_space_before_running()
     setmetatable(response, self)
     return response
 end
@@ -1546,7 +1582,11 @@ luxnet.send = syscall.new(
     function (receiver, message, protocol)
         local ok, err_or_response = syscall.trampoline(receiver, message, protocol)
         if ok then
-            return err_or_response
+            if err_or_response == false then
+                return false
+            else
+                return Response:new(err_or_response)
+            end
         else
             error(err_or_response, 2)
         end
@@ -1554,7 +1594,7 @@ luxnet.send = syscall.new(
 )
 
 
-
+  
 
 
 luxnet.broadcast = syscall.new(
@@ -1617,7 +1657,7 @@ function luxnet.receive(protocol, timeout)
         if event[1] == "luxnet_message" or event[1] == "luxnet_broadcast" then
             local message = event[2]
             if protocol == nil or message.protocol == protocol then
-                return message
+                return Message:new(message)
             end
         elseif event[1] == "terminate" then
             error("terminated", 2)
@@ -1661,7 +1701,7 @@ function luxnet.receive_from(sender, protocol, timeout)
         if event[1] == "luxnet_message" or event[1] == "luxnet_broadcast" then
             local message = event[2]
             if message.sender == sender and (protocol == nil or message.protocol == protocol) then
-                return message
+                return Message:new(message)
             end
         elseif event[1] == "terminate" then
             error("terminated", 2)
@@ -1724,13 +1764,14 @@ local n_messages = {[COMPUTER_ID] = 0}           ---@type {[number] : number} Th
 local awaiting_responses = {}                   ---@type {[number] : Response | true} The table for receiving responses.
 
 local simple_message_fields = {
-    ["sender"] = "number",
-    ["receiver"] = "number",
-    ["identifier"] = "number",
-    ["jumps"] = "number",
-    ["distance"] = "number",
-    ["time_sent"] = "number",
-    ["time_received"] = "number"
+    sender = "number",
+    receiver = "number",
+    identifier = "number",
+    jumps = "number",
+    time_to_live = "number",
+    distance = "number",
+    time_sent = "number",
+    time_received = "number"
 }
 
 ---Checks if a message is a luxnet response.
@@ -1812,13 +1853,14 @@ local function answer_calls_to_send(...)
             return false, "receiver ID must be between 0 and 65535"
         end
         local identifier = identifier_generator()
-        local message = luxnet.Message:new{
+        local message = {
             sender = COMPUTER_ID,
             receiver = receiver,
             message = message,
             protocol = protocol,
             identifier = identifier,
             jumps = 0,
+            time_to_live = math.huge,
             distance = 0,
             time_sent = os.time(),
             time_received = 0
@@ -1857,13 +1899,14 @@ local function answer_calls_to_broadcast(...)
             return false, "expected table | string | number | boolean | nil, string | nil, got '"..type(message).."', '"..type(protocol).."'"
         end
         local identifier = identifier_generator()
-        local message = luxnet.Message:new{
+        local message = {
             sender = COMPUTER_ID,
             receiver = luxnet.BROADCAST_ID,
             message = message,
             protocol = protocol,
             identifier = identifier,
             jumps = 0,
+            time_to_live = math.huge,
             distance = 0,
             time_sent = os.time(),
             time_received = 0
@@ -1928,12 +1971,12 @@ local function main()
             if type(message) == "table" then
                 if is_valid_message(message) then
                     -- It is a luxnet message
-                    message = luxnet.Message:new(message)
                     if distance == nil then
                         distance = math.huge
                     end
                     message.distance = message.distance + distance
                     message.jumps = message.jumps + 1
+                    message.time_to_live = message.time_to_live - 1
                     message.time_received = os.time()
 
                     -- handle its identifier
@@ -1970,8 +2013,10 @@ local function main()
                             if message.receiver == luxnet.BROADCAST_ID then
                                 os.queueEvent("luxnet_broadcast", message)
                             end
-                            for side, modem in pairs(modems) do
-                                modem.transmit(LUXNET_PORT, LUXNET_PORT, message)
+                            if message.time_to_live > 0 then
+                                for side, modem in pairs(modems) do
+                                    modem.transmit(LUXNET_PORT, LUXNET_PORT, message)
+                                end
                             end
                         end
                     end
@@ -2118,6 +2163,15 @@ local function run_shell()
 end
 
 return run_shell]],
+[[--]].."[["..[[
+LuxOS shell. Runs LuxOS applications.
+]].."]]"..[[
+
+
+
+
+
+]],
 [[--]].."[["..[[
 This is the main script of LuxOS. It has multiple steps:
 - It makes the "lux" and "kernel" APIs available.
@@ -2436,7 +2490,11 @@ return {processes = processes}]],
 This is the standart Lux service API. It contains all the function to perform system calls to the service system.
 ]].."]]"..[[
 
-_G.services = {}        -- The service Lux API. Allows you to register services that run in background.
+_G.services = {}        --]].."[["..[[
+The service Lux API. Allows you to register services that run in background.
+
+To declare a service, create a lua script file that returns a Service object.
+]].."]]"..[[
 
 
 
@@ -2466,9 +2524,6 @@ services.log = syscall.new(
         for index, arg in ipairs(args) do
             message = message..convert(arg)
         end
-        if type(message) ~= "string" then
-            error("expected string, got '"..type(message).."'", 2)
-        end
         local ok, err = syscall.trampoline(message)
         if not ok then
             error(err, 2)
@@ -2480,16 +2535,166 @@ services.log = syscall.new(
 
 
 
+---@enum ON_ERROR       --- Defines what action the service scheduler should take when the service main coroutine has an error.
+local ON_ERROR = {
+    RESTART = 1,    --- Restarts the service if the main function has an error. Calls stop() then starts the service.
+    STOP = 2        --- Marks the service as stopped. Calls stop() before.
+}
+
+services.ON_ERROR = ON_ERROR
+
+---@enum ON_RETURN      --- Defines what action the service scheduler should take when the service main coroutine returns.
+local ON_RETURN = {
+    RESTART = 1,    --- Restarts the service if the main function returns. Calls stop() then starts the service.
+    STOP = 2        --- Marks the service as stopped. Calls stop() before.
+}
+
+services.ON_RETURN = ON_RETURN
+
+---@enum STATUS         --- The possible states of a service.
+local STATUS = {
+    DISABLED = 1,   --- The service is disabled.
+    STARTING = 2,   --- The start() function is running.
+    RUNNING = 3,    --- The main service coroutine is running.
+    STOPPING = 4,   --- The stop() function is running or the main coroutine is still shutting down.
+    UNKNOWN = 5     --- The service has not been installed.
+}
+
+services.STATUS = STATUS
+
+
+
+
+
+---@class Service A LuxOS service descriptor.
+---@field name string The name of the service.
+---@field start function A function that will be called when the service needs to be started. It must return immediately.
+---@field main function The main service function. Will be called right after start() returns with its identifier as only argument. Remains running in a separate coroutine.
+---@field stop function A function that will be called when the service needs to be stopped. The main coroutine must stop before the stop timeout has been reached. stop() must return immediately.
+---@field timeout number A timeout started when stop() is called. If the main coroutine has not exited before that timeout, it will be killed.
+---@field on_error ON_ERROR What to do with the service if the main function has an error.
+---@field on_return ON_RETURN What to do with the service if the main function returns without a prior call to stop().
+---@field identifier integer A unique identifier for the service.
+---@field filepath Path The path to the file that declares the service. Executing this file should return a service the service object.
+local Service = {}
+services.Service = Service
+
+Service.__index = Service
+Service.__name = "Service"
+
+
+--- Creates a new Service object.
+---@param name string The name of the service to create.
+---@param start function The start function of the service.
+---@param main function The main function of the service.
+---@param stop function The stop function of the service.
+---@param timeout number? The timeout for stopping the service. Defaults to 10 seconds.
+---@param on_error ON_ERROR? The action to take if the main function has an error. Defaults to ON_ERROR.RESTART.
+---@param on_return ON_RETURN? The action to take if the main function returns unexpectedly. Defaults to ON_RETURN.STOP.
+---@return Service service The new Service object.
+function Service:new(name, start, main, stop, timeout, on_error, on_return)
+    if type(name) ~= "string" then
+        error("bad argument #1: string expected, got '"..type(name).."'", 2)
+    end
+    if type(start) ~= "function" then
+        error("bad argument #2: function expected, got '"..type(start).."'", 2)
+    end
+    if type(main) ~= "function" then
+        error("bad argument #3: function expected, got '"..type(main).."'", 2)
+    end
+    if type(stop) ~= "function" then
+        error("bad argument #4: function expected, got '"..type(stop).."'", 2)
+    end
+    if timeout == nil then
+        timeout = 10
+    end
+    if type(timeout) ~= "number" then
+        error("bad argument #5: number expected, got '"..type(timeout).."'", 2)
+    end
+    if on_error == nil then
+        on_error = ON_ERROR.RESTART
+    end
+    if type(on_error) ~= "number" then
+        error("bad argument #6: number expected, got '"..type(on_error).."'", 2)
+    end
+    local ok = false
+    for name, value in pairs(ON_ERROR) do
+        if value == on_error then
+            ok = true
+            break
+        end
+    end
+    if not ok then
+        error("bad argument #6: expected value in enumeration 'ON_ERROR', got '"..on_error.."'", 2)
+    end
+    if on_return == nil then
+        on_return = ON_RETURN.STOP
+    end
+    if type(on_return) ~= "number" then
+        error("bad argument #7: number expected, got '"..type(on_return).."'", 2)
+    end
+    ok = false
+    for name, value in pairs(ON_RETURN) do
+        if value == on_return then
+            ok = true
+            break
+        end
+    end
+    if not ok then
+        error("bad argument #7: expected value in enumeration 'ON_RETURN', got '"..on_return.."'", 2)
+    end
+    local service = {}
+    setmetatable(service, self)
+    service.name = name
+    service.start = start
+    service.main = main
+    service.stop = stop
+    service.timeout = timeout
+    service.on_error = on_error
+    service.on_return = on_return
+    service.identifier = -1
+    return service
+end
+
+
+
+
+
+function Service:__tostring()
+    if self:status() == STATUS.RUNNING then
+        return "Service '"..self.name.."' [running]"
+    elseif self:status() == STATUS.STOPPING then
+        return "Service '"..self.name.."' [stopping]"
+    elseif self:status() == STATUS.STARTING then
+        return "Service '"..self.name.."' [starting]"
+    elseif self:status() == STATUS.DISABLED then
+        return "Service '"..self.name.."' [disabled]"
+    else
+        return "Service '"..self.name.."' [unknown]"
+    end
+end
+
+
+
+
+
 services.enumerate = syscall.new(
     "services.enumerate",
-    ---Returns a table of the registered services, indexed by names associated to a boolean indicating if the service is running.
-    ---@return {[string] : boolean} services The table of services.
+    ---Returns a table of registered services indexed by their identifiers.
+    ---@return {[integer]: Service} services The table of Service objects.
     function ()
         local ok, err = syscall.trampoline()
         if not ok then
             error(err, 2)
         end
-        return err
+        local services = {}
+        for _, service_info in ipairs(err) do
+            local service = Service:new(service_info.name, service_info.start, service_info.main, service_info.stop, service_info.timeout, service_info.on_error, service_info.on_return)
+            service.identifier = service_info.identifier
+            service.filepath = service_info.filepath
+            services[service.identifier] = service
+        end
+        return services
     end
 )
 
@@ -2499,8 +2704,19 @@ services.enumerate = syscall.new(
 
 services.install = syscall.new(
     "services.install",
-    function ()
-        
+    ---Installs the service from the lua script file at given path.
+    ---@param filepath Path | string The path to the lua script file that returns the prepared Service object.
+    ---@return Service service The newly created service object.
+    function (filepath)
+        if type(filepath) == "string" then
+            filepath = Path:new(filepath)
+        end
+        local ok, err = syscall.trampoline(filepath)
+        if ok then
+            return err
+        else
+            error(err, 2)
+        end
     end
 )
 
@@ -2510,8 +2726,164 @@ services.install = syscall.new(
 
 services.uninstall = syscall.new(
     "services.uninstall",
-    function ()
-        
+    ---Uninstalls the service with the given identifier.
+    ---@param identifier integer | Service The service identifier. Can also be a Service object.
+    function (identifier)
+        if type(identifier) == "Service" then
+            identifier = identifier.identifier
+        end
+        local ok, err = syscall.trampoline(identifier)
+        if ok then
+            return
+        else
+            error(err, 2)
+        end
+    end
+)
+
+---Uninstalls the service associated with the Service object.
+function Service:uninstall()
+    services.uninstall(self)
+    self.identifier = -1
+end
+
+
+
+
+
+services.status = syscall.new(
+    "services.status",
+    ---Returns the status of the service with the given identifier.
+    ---@param identifier integer | Service The service identifier. Can also be a Service object.
+    ---@return STATUS service_status The status of the service.
+    function (identifier)
+        if type(identifier) == "Service" then
+            identifier = identifier.identifier
+        end
+        local ok, err = syscall.trampoline(identifier)
+        if ok then
+            return err
+        else
+            error(err, 2)
+        end
+    end
+)
+
+---Returns the status of the service with the associated Service object.
+---@return STATUS service_status The status of the service.
+function Service:status()
+    return services.status(self)
+end
+
+
+
+
+
+services.enable = syscall.new(
+    "services.enable",
+    ---Enables the service with the given identifier.
+    ---@param identifier integer | Service The service identifier. Can also be a Service object.
+    function (identifier)
+        if type(identifier) == "Service" then
+            identifier = identifier.identifier
+        end
+        local ok, err = syscall.trampoline(identifier)
+        if ok then
+            return
+        else
+            error(err, 2)
+        end
+    end
+)
+
+---Enables the service associated with the Service object.
+function Service:enable()
+    services.enable(self)
+end
+
+
+
+
+
+services.disable = syscall.new(
+    "services.disable",
+    ---Disables the service with the given identifier.
+    ---@param identifier integer | Service The service identifier. Can also be a Service object.
+    function (identifier)
+        if type(identifier) == "Service" then
+            identifier = identifier.identifier
+        end
+        local ok, err = syscall.trampoline(identifier)
+        if ok then
+            return
+        else
+            error(err, 2)
+        end
+    end
+)
+
+---Enables the service associated with the Service object.
+function Service:disable()
+    services.disable(self)
+end
+
+
+
+
+
+---Restarts the service with the given identifier.
+---@param identifier integer | Service The service identifier. Can also be a Service object.
+function services.restart(identifier)
+    services.disable(identifier)
+    services.enable(identifier)
+end
+
+---Restarts the service associated with the Service object.
+function Service:restart()
+    services.restart(self)
+end
+
+
+
+
+
+services.get_logs = syscall.new(
+    "services.get_logs",
+    ---Returns the logs of the service with the given identifier.
+    ---@param identifier integer | Service The service identifier. Can also be a Service object.
+    ---@return {[number]: string} logs The logs of the service a table of logs indexed by time.
+    function (identifier)
+        if type(identifier) == "Service" then
+            identifier = identifier.identifier
+        end
+        local ok, err = syscall.trampoline(identifier)
+        if ok then
+            return err
+        else
+            error(err, 2)
+        end
+    end
+)
+
+---Enables the service associated with the Service object.
+---@return {[number]: string} logs The logs of the service a table of logs indexed by time.
+function Service:get_logs()
+    return services.get_logs(self)
+end
+
+
+
+
+
+services.reload = syscall.new(
+    "services.reload",
+    ---Reloads the given service. This allows to take into account any file changes to the service files. Services still need to be restarted.
+    ---@param identifier integer | Service The service identifier. Can also be a Service object.
+    function (identifier)
+        local ok, err = syscall.trampoline(identifier)
+        if not ok then
+            error(err, 2)
+        end
     end
 )
 
@@ -2519,61 +2891,36 @@ services.uninstall = syscall.new(
 
 
 
-services.start = syscall.new(
-    "services.start",
-    function ()
-        
-    end
-)
-
-
-
-
-
-services.stop = syscall.new(
-    "services.stop",
-    function ()
-        
-    end
-)
-
-
-
-
-
-services.read_logs = syscall.new(
-    "services.read_logs",
-    function ()
-        
-    end
-)
-
-
-
-
-
-return {services = services}]],
+return {
+    services = services
+}]],
 [[--]].."[["..[[
 This is the scheduler of the service system. It loads, runs and terminates all the services. 
-
-Note that a service script will be transformed into a coroutine that will be run by the scheduler.
-This coroutine will get all the system events and should answer to the "service" events.
-These events have two versions:
-("servcice", "start", "<service name>") received as script arguments.
-("service", "stop", "<service name>") received when the service should stop.
-Note that when the stop event is received, the service will not be run again, even if the coroutine is still alive.
-In the case of a "shutdown" event, the service is guaranteed to receive the "shutdown" event followed by a "service stop" event.
 ]].."]]"..[[
 
 
 
 
 
-local service_coroutines = {}     ---@type {[string] : thread} The table of services coroutines indexed by names
-local CURRENT_SERVICE = nil         ---@type string? The currently running service, if any.
-local SERVICES_ENABLED_DIR = "LuxOS/services/scripts/enabled/"           --- This is where all the currently enabled services script files will be located
-local SERVICES_DISABLED_DIR = "LuxOS/services/scripts/disabled/"           --- This is where all the currently disabled services script files will be located
-local SERVICES_LOGS = "LuxOS/services/logs"                     --- This is the log file, which holds all the services logs.
+local SERVICES_UNITS_DIR = "LuxOS/services/units/"      ---This is where all the services metadata will be written.
+local SERVICES_LOGS = "LuxOS/services/logs/"            ---This is the log directory, which holds all the services logs.
+local SERVICES = {}                                     ---@type {[integer]: boolean} The set of services identifiers with a boolean indicating if the service is enabled.
+local SERVICES_NAMES = {}                               ---@type {[integer]: string} The table of the services names.
+local SERVICES_START = {}                               ---@type {[integer]: function} The table of the services start functions.
+local SERVICES_MAIN = {}                                ---@type {[integer]: function} The table of the services main functions.
+local SERVICES_STOP = {}                                ---@type {[integer]: function} The table of the services stop functions.
+local SERVICES_TIMEOUT = {}                             ---@type {[integer]: number} The table of the services timeouts.
+local SERVICES_ON_ERROR = {}                            ---@type {[integer]: ON_ERROR} The table of error actions.
+local SERVICES_ON_RETURN = {}                           ---@type {[integer]: ON_RETURN} The table of return actions.
+local SERVICES_FILEPATHS = {}                           ---@type {[integer]: Path} The table of Paths to the services script files.
+local SERVICES_ROUTINES = {}                            ---@type {[integer]: thread} A table that contains a kernel coroutine that handles each running service.
+local SERVICES_LOG_FILES = {}                           ---@type {[integer]: handle} The table of handles to log files for all enabled services.
+local SERVICES_STOP_ROUTINES = {}                       ---@type {[integer]: thread[]} A routine for each service being stopped. Will be resumed when the service stops.
+local SERVICES_STATUS = {}                              ---@type {[integer]: STATUS} The status of each service.
+local CURRENT_SERVICE = nil                             ---@type integer? The currently running service.
+local DISPLAY_NAME = "service manager"                  ---@type string The name to display on logs.
+local log = services.log
+
 local SERVICE_FS_STRUCTURE = kernel.filesystem_structure{
 
     kernel.filesystem_node{
@@ -2587,30 +2934,15 @@ local SERVICE_FS_STRUCTURE = kernel.filesystem_structure{
                 children = {
 
                     kernel.filesystem_node{
-                        name = "scripts",
+                        name = "units",
                         type = kernel.DIRECTORY,
-                        mode = kernel.DIRECTORY.ENSURE_EXISTS,
-                        children = {
-
-                            kernel.filesystem_node{
-                                name = "enabled",
-                                type = kernel.DIRECTORY,
-                                mode = kernel.DIRECTORY.ENSURE_EXISTS
-                            },
-
-                            kernel.filesystem_node{
-                                name = "disabled",
-                                type = kernel.DIRECTORY,
-                                mode = kernel.DIRECTORY.ENSURE_EXISTS
-                            }
-
-                        }
+                        mode = kernel.DIRECTORY.ENSURE_EXISTS
                     },
 
                     kernel.filesystem_node{
                         name = "logs",
-                        type = kernel.FILE,
-                        mode = kernel.FILE.ENSURE_EXISTS
+                        type = kernel.DIRECTORY,
+                        mode = kernel.DIRECTORY.ENSURE_EXISTS
                     },
 
                     kernel.filesystem_node{
@@ -2632,104 +2964,336 @@ local SERVICE_FS_STRUCTURE = kernel.filesystem_structure{
 }
 
 
+
+
+
 ---Internal function that creates a table to serve as the runtime environment of service coroutines.
 local function create_service_environment()
     local env = os.create_user_environment()
-    env["print"] = services.log
-    env["write"] = services.log
+    env["print"] = log
+    env["write"] = log
     return env
 end
 
 
----Internal wrapper function to run a service script file.
----@param path string The path to the service script file.
----@param name string The name of the service.
-local function service_main(path, name)
-    local service, err = loadfile(path, create_service_environment())
-    if not service then
-        error(err, 2)
-    else
-        service("service", "start", name)
+
+
+
+---Internal function ran as a coroutine that handles the execution of a service.
+---@param identifier integer The service identifier.
+local function run_service(identifier)
+    local coro, ok, err, event, start_coro, stop_coro, timer, disable
+    coroutine.yield()
+
+    local function cycle()
+        start_coro = coroutine.create(SERVICES_START[identifier])
+        CURRENT_SERVICE = identifier
+        DISPLAY_NAME = "service manager"
+        log("Starting service.")
+        SERVICES_STATUS[identifier] = services.STATUS.STARTING
+        DISPLAY_NAME = SERVICES_NAMES[identifier]
+        ok, err = coroutine.resume(start_coro)
+        DISPLAY_NAME = "service manager"
+        if not ok then                  -- Service start function had an exception
+            log("Service start() function encountered an exception: "..err)
+            coroutine.yield(false, err)
+            return 
+        end
+        if coroutine.status(start_coro) ~= "dead" then  -- Service start function did not return immediately
+            log("Service start() function did not return without yielding.")
+            coroutine.yield(false, "service start function did not return immediately")
+            return
+        end
+
+        coro = coroutine.create(SERVICES_MAIN[identifier])
+        SERVICES_STATUS[identifier] = services.STATUS.RUNNING
+        DISPLAY_NAME = "service manager"
+        CURRENT_SERVICE = identifier
+        log("Starting service main() coroutine.")
+
+        DISPLAY_NAME = SERVICES_NAMES[identifier]
+        ok, err = coroutine.resume(coro, identifier)
+        DISPLAY_NAME = "service manager"
+        if not ok then              -- Service main coroutine had an exception
+            disable = SERVICES_ON_ERROR[identifier] == services.ON_ERROR.STOP
+            log("Service had an exception when starting the main() coroutine: "..err)
+        end
+        if coroutine.status(coro) == "dead" then    -- Service main coroutine returned unexpectedly
+            disable = SERVICES_ON_ERROR[identifier] == services.ON_RETURN.STOP
+            log("Service main() coroutine returned immediately.")
+            ok = false
+        end
+
+        
+        event = {coroutine.yield(true)}
+        CURRENT_SERVICE = identifier
+        DISPLAY_NAME = SERVICES_NAMES[identifier]
+        if ok then
+            while true do
+                if #SERVICES_STOP_ROUTINES[identifier] > 0 then
+                    disable = true
+                    break
+                end
+                ok, err = coroutine.resume(coro, table.unpack(event))
+                DISPLAY_NAME = "service manager"
+                if not ok then              -- Service main coroutine had an exception
+                    disable = SERVICES_ON_ERROR[identifier] == services.ON_ERROR.STOP
+                    log("Service had an exception the main() coroutine: "..err)
+                    break
+                end
+                if coroutine.status(coro) == "dead" then    -- Service main coroutine returned unexpectedly
+                    disable = SERVICES_ON_ERROR[identifier] == services.ON_RETURN.STOP
+                    log("Service main() coroutine returned unexpectedly.")
+                    break
+                end
+                event = {coroutine.yield()}
+                CURRENT_SERVICE = identifier
+                DISPLAY_NAME = SERVICES_NAMES[identifier]
+            end
+        end
+
+        CURRENT_SERVICE = identifier
+        stop_coro = coroutine.create(SERVICES_STOP[identifier])
+        DISPLAY_NAME = "service manager"
+        log("Stopping service.")
+        SERVICES_STATUS[identifier] = services.STATUS.STOPPING
+        DISPLAY_NAME = SERVICES_NAMES[identifier]
+        ok, err = coroutine.resume(stop_coro)
+        DISPLAY_NAME = "service manager"
+        if not ok then                  -- Service stop function had an exception
+            log("Service stop() function had an exception: "..err)
+        elseif coroutine.status(stop_coro) ~= "dead" then  -- Service stop function did not return immediately
+            log("Service stop() function did not return without yielding.")
+        else
+            timer = os.startTimer(SERVICES_TIMEOUT[identifier])
+
+            event = {"service", "stop"}
+            while true do
+                CURRENT_SERVICE = identifier
+                DISPLAY_NAME = SERVICES_NAMES[identifier]
+                ok, err = coroutine.resume(coro, table.unpack(event))
+                DISPLAY_NAME = "service manager"
+                if not ok then              -- Service main coroutine had an exception
+                    log("Service had an exception the main() coroutine while stopping: "..err)
+                    os.cancelTimer(timer)
+                end
+                if event[1] == "timer" and event[2] == timer then   -- Service main did not stop in time
+                    log("Service stop timeout reached. Cleaning main() coroutine.")
+                    ok = false
+                    break
+                end
+                if coroutine.status(coro) == "dead" then            -- Service main stopped as expected
+                    log("Service main() coroutine stopped successfully.")
+                    ok = true
+                    os.cancelTimer(timer)
+                    break
+                end
+                event = {coroutine.yield()}
+            end
+        end
+        
+        while #SERVICES_STOP_ROUTINES[identifier] > 0 do        -- Signal all awaiting stop routines of the termination of the service
+            coroutine.resume(SERVICES_STOP_ROUTINES[identifier][#SERVICES_STOP_ROUTINES[identifier]].."]]"..[[, ok)
+            table.remove(SERVICES_STOP_ROUTINES[identifier])
+        end
+
+        coro = nil
+        if disable then
+            SERVICES[identifier] = false
+            CURRENT_SERVICE = identifier
+            DISPLAY_NAME = "service manager"
+            log("Service successfully stopped.")
+            SERVICES_STATUS[identifier] = services.STATUS.DISABLED
+        end
+    end
+
+    while true do
+        if SERVICES[identifier] then        -- Service should be running
+            kernel.panic_pcall("cycle", cycle)
+        end
+        coroutine.yield()
     end
 end
 
 
----Starts a service's coroutine from its script file and adds it in the service registry.
----@param name string The name of the service
----@return boolean success If the service was successfully loaded
----@return string success_message The error message if not, (or "Success")
-local function launch_service(name)
-    local coro = coroutine.create(service_main)
-    CURRENT_SERVICE = name
-    local ok, err = coroutine.resume(coro, SERVICES_ENABLED_DIR..name, name)
-    CURRENT_SERVICE = nil
-    if not ok then
-        return false, "Service '"..name.."' had an error at startup:\n"..tostring(err)
+
+
+
+---Internal function that enables a service.
+---@param identifier integer The service identifier.
+local function enable_service(identifier)
+    if SERVICES[identifier] == nil then
+        kernel.panic("Unknown service identifier: "..identifier)
     end
-    if coroutine.status(coro) ~= "suspended" then
-        return false, "Service '"..name.."' returned at startup"
+    local table_file = kernel.panic_pcall("fs.open", fs.open, SERVICES_UNITS_DIR..identifier..".table", "w")
+    kernel.panic_pcall("table_file.write", table_file.write, kernel.panic_pcall("textutils.serialise", textutils.serialise, {filepath = tostring(SERVICES_FILEPATHS[identifier]), enabled = true, identifier = identifier}))
+    kernel.panic_pcall("table_file.close", table_file.close)
+    local service_log_file = kernel.panic_pcall("fs.open", fs.open, SERVICES_LOGS..identifier..".log", "a")
+    SERVICES_LOG_FILES[identifier] = service_log_file
+end
+
+
+
+
+
+---Internal function that disables a service.
+---@param identifier integer The service identifier.
+local function disable_service(identifier)
+    if SERVICES[identifier] == nil then
+        kernel.panic("Unknown service identifier: "..identifier)
     end
-    service_coroutines[name] = coro
-    return true, "Success"
-end
-
-
----Stops a service's coroutine and removes it from the service registry.
----Note that even on failure, the service is removed from the registry.
----@param name string The name of the service
----@return boolean success If the service was successfully stopped
----@return string success_message The error message if not, (or "Success")
-local function shutdown_service(name)
-    local coro = service_coroutines[name]
-    coroutine.resume(coro, "service", "stop")
-    service_coroutines[name] = nil
-    if coroutine.status(coro) ~= "dead" then
-        return false, "Coroutine of service '"..name.."' did not die when sent the 'service stop' event"
+    local table_file = kernel.panic_pcall("fs.open", fs.open, SERVICES_UNITS_DIR..identifier..".table", "w")
+    kernel.panic_pcall("table_file.write", table_file.write, kernel.panic_pcall("textutils.serialise", textutils.serialise, {filepath = tostring(SERVICES_FILEPATHS[identifier]), enabled = false, identifier = identifier}))
+    kernel.panic_pcall("table_file.close", table_file.close)
+    if SERVICES_LOG_FILES[identifier] ~= nil then
+        SERVICES_LOG_FILES[identifier].close()
     end
-    return true, "Success"
+    SERVICES_LOG_FILES[identifier] = nil
 end
 
 
----Returns a table of the services indexed by name. The values are booleans indicating if the service is running.
----@return {[string] : boolean} services The table of all services by names.
-local function enumerate_services()
-    local tab = {}
-    for i, name in ipairs(kernel.panic_pcall("fs.list", fs.list, SERVICES_ENABLED_DIR)) do
-        tab[name] = true
+
+
+
+---Internal function that loads a service from its script file.
+---@param filepath string The path to the file to load the service from.
+---@param identifier integer? The identifier of the service if it already has one.
+---@return boolean ok Indicates if the service was loaded successfully.
+---@return integer | string indentifier_or_err The new service identifier or the error message.
+local function load_service(filepath, identifier)
+    local service_loading_function, err = loadfile(filepath, create_service_environment())
+    if service_loading_function == nil then
+        return false, err or "unknown error"
     end
-    for i, name in ipairs(kernel.panic_pcall("fs.list", fs.list, SERVICES_DISABLED_DIR)) do
-        tab[name] = false
+    local service_loading_coro = coroutine.create(service_loading_function)
+    local res = {coroutine.resume(service_loading_coro)}
+    if not res[1] then
+        return false, res[2]
     end
-    return tab
+    if coroutine.status(service_loading_coro) ~= "dead" then
+        return false, "service script file did not return without yielding"
+    end
+    table.remove(res, 1)
+    if #res ~= 1 then
+        return false, "service script file did not return a single value"
+    end
+    local service = res[1]
+    if type(service) ~= "Service" then
+        return false, "service script did not return a service object but a '"..type(service).."'"
+    end
+    local save = false
+    if identifier == nil then       -- New service: save it too.
+        local i = 1
+        while kernel.panic_pcall("fs.exists", fs.exists, SERVICES_UNITS_DIR..i..".table") do
+            i = i + 1
+        end
+        identifier = i
+        save = true
+    else                            -- Existing service: load it
+        if not kernel.panic_pcall("fs.exists", fs.exists, SERVICES_UNITS_DIR..identifier..".table") then
+            kernel.panic("trying to load unknown service: "..identifier.." not found in units dir.")
+        end
+        if SERVICES[identifier] ~= nil then
+            kernel.panic("Trying to load an existing service: "..identifier)
+        end    
+    end
+    SERVICES[identifier] = false
+    SERVICES_NAMES[identifier] = service.name
+    SERVICES_START[identifier] = service.start
+    SERVICES_MAIN[identifier] = service.main
+    SERVICES_STOP[identifier] = service.stop
+    SERVICES_TIMEOUT[identifier] = service.timeout
+    SERVICES_ON_ERROR[identifier] = service.on_error
+    SERVICES_ON_RETURN[identifier] = service.on_return
+    SERVICES_FILEPATHS[identifier] = Path:new(filepath)
+    SERVICES_ROUTINES[identifier] = coroutine.create(run_service)
+    SERVICES_STOP_ROUTINES[identifier] = {}
+    SERVICES_STATUS[identifier] = services.STATUS.DISABLED
+    kernel.promote_coroutine(SERVICES_ROUTINES[identifier])
+    coroutine.resume(SERVICES_ROUTINES[identifier], identifier)
+    if save then
+        disable_service(identifier)
+    end
+    return true, identifier
 end
 
 
----Moves a service from the disabled folder into the enabled folder.
----@param name string The name of the service to enable
-local function enable_service(name)
-    kernel.panic_pcall("fs.move", fs.move, SERVICES_DISABLED_DIR..name, SERVICES_ENABLED_DIR..name)
+
+
+
+---Internal function that unloads (uninstalls) a loaded service.
+---@param identifier integer The service identifier.
+local function unload_service(identifier)
+    if SERVICES[identifier] == nil then
+        kernel.panic("Unknown service identifier: "..identifier)
+    end
+    if SERVICES[identifier] then
+        kernel.panic("Trying to unload a running service: "..identifier)
+    end
+    kernel.panic_pcall("fs.delete", fs.delete, SERVICES_UNITS_DIR..identifier..".table")
+    kernel.panic_pcall("fs.delete", fs.delete, SERVICES_LOGS..identifier..".log")
+    SERVICES_NAMES[identifier] = nil
+    SERVICES_START[identifier] = nil
+    SERVICES_MAIN[identifier] = nil
+    SERVICES_STOP[identifier] = nil
+    SERVICES_TIMEOUT[identifier] = nil
+    SERVICES_ON_ERROR[identifier] = nil
+    SERVICES_ON_RETURN[identifier] = nil
+    SERVICES_FILEPATHS[identifier] = nil
+    SERVICES_ROUTINES[identifier] = nil
+    SERVICES_STOP_ROUTINES[identifier] = nil
+    SERVICES_STATUS[identifier] = nil
 end
 
 
----Moves a service from the enabled folder into the disabled folder.
----@param name string The name of the service to disable
-local function disable_service(name)
-    kernel.panic_pcall("fs.move", fs.move, SERVICES_ENABLED_DIR..name, SERVICES_DISABLED_DIR..name)
+
+
+
+---Internal function that starts the service with given identifier
+---@param identifier integer The service identifier.
+---@return boolean ok Indicates if the service was successfully started.
+---@return string? error The error message if an error occured.
+local function start_service(identifier)
+    if SERVICES[identifier] == nil then
+        kernel.panic("Unknown service identifier: "..identifier)
+    end
+    SERVICES[identifier] = true
+    return coroutine.resume(SERVICES_ROUTINES[identifier])
 end
 
 
----Installs a service from the given lua script file with the given name. The service will be disabled.
----@param source string The path to the script file of the service
----@param name string The name of the new service
-local function install_service(source, name)
-    kernel.panic_pcall("fs.copy", fs.copy, source, SERVICES_DISABLED_DIR..name)
-end
 
 
----Uninstalls the service with the given name. The service must be disabled.
----@param name string The name of the service to uninstall
-local function uninstall_service(name)
-    kernel.panic_pcall("fs.delete", fs.delete, SERVICES_DISABLED_DIR..name)
+
+---Internal function that stops the service with the given identifier.
+---@param identifier integer The service identifier.
+---@return boolean ok Indicates if the service was stopped successfully.
+---@return string? error The error message if an error occured.
+local function stop_service(identifier)
+    local ok, err
+
+    local function await_stop()
+        while true do
+            local event = {coroutine.yield()}
+            if event[1] == "terminate" then
+                ok = false
+                err = "terminated"
+                return
+            elseif type(event[1]) == "boolean" then
+                lux.tick()
+                ok = event[1]
+                err = "service #"..identifier.." failed to stop after timeout"
+                return
+            end
+        end
+    end
+    local await_stop_coro = coroutine.create(await_stop)
+
+    table.insert(SERVICES_STOP_ROUTINES[identifier], await_stop_coro)
+    while coroutine.status(await_stop_coro) ~= "dead" do
+        coroutine.resume(await_stop_coro, coroutine.yield())
+    end
+    return ok, err
 end
 
 
@@ -2739,41 +3303,212 @@ end
 ---Answers the system calls to services.log.
 local function answer_calls_to_log(...)
     local args = {...}
+    if #args ~= 1 then
+        return false, "expected exactly one argument, got "..#args
+    else
+        local message = args[1]
+        if type(message) ~= "string" then
+            return false, "bad argument #1: string expected, got "..type(message)
+        end
+        if CURRENT_SERVICE == nil then
+            return false, "cannot use services.log outside of a service."
+        end
+        if SERVICES_LOG_FILES[CURRENT_SERVICE] == nil then
+            return false, "service #"..CURRENT_SERVICE.." is unknown or not running"
+        end
+        SERVICES_LOG_FILES[CURRENT_SERVICE].write(os.time()..", "..os.day()..", "..textutils.serialise("["..DISPLAY_NAME.."] "..message).."\n")
+        SERVICES_LOG_FILES[CURRENT_SERVICE].flush()
+        return true
+    end
 end
 
 ---Answers the system calls to services.enumerate.
 local function answer_calls_to_enumerate(...)
     local args = {...}
     if #args > 0 then
-        return false, "syscall got "..tostring(#args).." parameters, expected 0"
+        return false, "expected no arguments, got "..#args
     else
-        return true, kernel.panic_pcall("enumerate_services", enumerate_services)
+        local tab = {}
+        for identifier, running in pairs(SERVICES) do
+            tab[identifier] = {
+                name = SERVICES_NAMES[identifier],
+                start = SERVICES_START[identifier],
+                main = SERVICES_MAIN[identifier],
+                stop = SERVICES_STOP[identifier],
+                timeout = SERVICES_TIMEOUT[identifier],
+                on_error = SERVICES_ON_ERROR[identifier],
+                on_return = SERVICES_ON_RETURN[identifier],
+                identifier = identifier,
+                filepath = SERVICES_FILEPATHS[identifier]
+            }
+        end
+        return true, tab
     end
 end
 
 ---Answers the system calls to services.install.
 local function answer_calls_to_install(...)
     local args = {...}
+    if #args ~= 1 then
+        return false, "expected exactly one argument, got "..#args
+    else
+        local filepath = args[1]        ---@type string | Path
+        if type(filepath) == "Path" then
+            filepath = tostring(filepath)
+        end
+        if type(filepath) ~= "string" then
+            return false, "bad argument #1: string or Path expected, got '"..type(filepath).."'"
+        end
+        if not kernel.panic_pcall("fs.exists", fs.exists, filepath) then
+            return false, "file does not exist: '"..filepath.."'"
+        end
+        if kernel.panic_pcall("fs.isDir", fs.isDir, filepath) then
+            return false, "file is a directory: '"..filepath.."'"
+        end
+        local ok, err = load_service(filepath)
+        if not ok then
+            return false, err
+        end
+        return true, err
+    end
 end
 
 ---Answers the system calls to services.uninstall.
 local function answer_calls_to_uninstall(...)
     local args = {...}
+    if #args ~= 1 then
+        return false, "expected exactly one argument, got "..#args
+    else
+        local identifier = args[1]      ---@type integer | Service
+        if type(identifier) == "Service" then
+            identifier = identifier.identifier
+        end
+        if type(identifier) ~= "number" then
+            return false, "bad argument #1: integer or Service expected, got '"..type(identifier).."'"
+        end
+        if SERVICES[identifier] == nil then
+            return false, "unknown service identifier: "..identifier
+        end
+        if SERVICES[identifier] then
+            return false, "service #"..identifier.." is running"
+        end
+        unload_service(identifier)
+        return true
+    end
 end
 
----Answers the system calls to services.start.
-local function answer_calls_to_start(...)
+---Answers the system calls to services.status.
+local function answer_calls_to_status(...)
     local args = {...}
+    if #args ~= 1 then
+        return false, "expected exactly one argument, got "..#args
+    else
+        local identifier = args[1]      ---@type integer | Service
+        if type(identifier) == "Service" then
+            identifier = identifier.identifier
+        end
+        if type(identifier) ~= "number" then
+            return false, "bad argument #1: integer or Service expected, got '"..type(identifier).."'"
+        end
+        if SERVICES[identifier] == nil then
+            return false, "unknown service identifier: "..identifier
+        end
+        return true, SERVICES_STATUS[identifier]
+    end
 end
 
----Answers the system calls to services.stop.
-local function answer_calls_to_stop(...)
+---Answers the system calls to services.enable.
+local function answer_calls_to_enable(...)
     local args = {...}
+    if #args ~= 1 then
+        return false, "expected exactly one argument, got "..#args
+    else
+        local identifier = args[1]      ---@type integer | Service
+        if type(identifier) == "Service" then
+            identifier = identifier.identifier
+        end
+        if type(identifier) ~= "number" then
+            return false, "bad argument #1: integer or Service expected, got '"..type(identifier).."'"
+        end
+        if SERVICES[identifier] == nil then
+            return false, "unknown service identifier: "..identifier
+        end
+        if SERVICES[identifier] then
+            return false, "service #"..identifier.." is already enabled"
+        end
+        enable_service(identifier)
+        local ok, err = start_service(identifier)
+        if not ok then
+            return false, err
+        end
+        return true
+    end
+end
+
+---Answers the system calls to services.disable.
+local function answer_calls_to_disable(...)
+    local args = {...}
+    if #args ~= 1 then
+        return false, "expected exactly one argument, got "..#args
+    else
+        local identifier = args[1]      ---@type integer | Service
+        if type(identifier) == "Service" then
+            identifier = identifier.identifier
+        end
+        if type(identifier) ~= "number" then
+            return false, "bad argument #1: integer or Service expected, got '"..type(identifier).."'"
+        end
+        if SERVICES[identifier] == nil then
+            return false, "unknown service identifier: "..identifier
+        end
+        if not SERVICES[identifier] then
+            return false, "service #"..identifier.." is already disabled"
+        end
+        local ok, err = stop_service(identifier)
+        if not ok then
+            return false, err
+        end
+        disable_service(identifier)
+        if ok then
+            return true
+        else
+            return false, err
+        end
+    end
 end
 
 ---Answers the system calls to services.read_logs.
 local function answer_calls_to_read_logs(...)
     local args = {...}
+end
+
+---Answers the system calls to services.reload.
+local function answer_calls_to_reload(...)
+    local args = {...}
+    if #args ~= 1 then
+        return false, "expected exactly one argument, got "..#args
+    else
+        local identifier = args[1]      ---@type integer | Service
+        if type(identifier) == "Service" then
+            identifier = identifier.identifier
+        end
+        if type(identifier) ~= "number" then
+            return false, "bad argument #1: integer or Service expected, got '"..type(identifier).."'"
+        end
+        if SERVICES[identifier] == nil then
+            return false, "unknown service identifier: "..identifier
+        end
+        if SERVICES[identifier] then
+            return false, "service #"..identifier.." is running"
+        end
+        local filepath = SERVICES_FILEPATHS[identifier]
+        unload_service(identifier)
+        local ok, err = load_service(filepath, identifier)
+        if not ok then
+            return false, err
+        end
+        return true
+    end
 end
 
 
@@ -2788,20 +3523,30 @@ local function main()
     syscall.affect_routine(services.enumerate, answer_calls_to_enumerate)
     syscall.affect_routine(services.install, answer_calls_to_install)
     syscall.affect_routine(services.uninstall, answer_calls_to_uninstall)
-    syscall.affect_routine(services.start, answer_calls_to_start)
-    syscall.affect_routine(services.stop, answer_calls_to_stop)
-    syscall.affect_routine(services.read_logs, answer_calls_to_read_logs)
+    syscall.affect_routine(services.status, answer_calls_to_status)
+    syscall.affect_routine(services.enable, answer_calls_to_enable)
+    syscall.affect_routine(services.disable, answer_calls_to_disable)
+    syscall.affect_routine(services.get_logs, answer_calls_to_read_logs)
+    syscall.affect_routine(services.reload, answer_calls_to_reload)
 
     kernel.mark_routine_ready()
 
     -- Startup : load enabled services
 
-    for name, enabled in pairs(enumerate_services()) do
-        if enabled then
-            local ok, err = launch_service(name)
-            if not ok then
-                services.log("Service '"..name.."' crashed at startup:\n"..err)
-            end
+    for _, name in ipairs(kernel.panic_pcall("fs.list", fs.list, SERVICES_UNITS_DIR)) do
+        local unit_file = kernel.panic_pcall("fs.open", fs.open, SERVICES_UNITS_DIR..name, "r")
+        local ok, data = pcall(textutils.unserialise, unit_file.readAll())
+        if not ok then
+            kernel.panic("corrupted service unit file: "..name)
+        end
+        unit_file.close()
+        if type(data.filepath) ~= "string" or type(data.enabled) ~= "boolean" or type(data.identifier) ~= "number" then
+            kernel.panic("corrupted service unit file: "..name)
+        end
+        load_service(data.filepath, data.identifier)
+        if data.enabled then
+            enable_service(data.identifier)
+            start_service(data.identifier)
         end
     end
 
@@ -2809,29 +3554,45 @@ local function main()
 
     while not kernel.is_system_shutting_down() do
         local event = {coroutine.yield()}
-        for name, coro in pairs(service_coroutines) do
-            local ok, err = coroutine.resume(coro, table.unpack(event))
-            if not ok then
-                services.log("Service '"..name.."' stopped due to an exception:\n"..err)
-                service_coroutines[name] = nil
-                ok, err = launch_service(name)
-                if not ok then
-                    services.log("Service '"..name.."' could not be restarted after an exception as another one occured at startup:\n"..err)
-                    disable_service(name)
-                end
+        for identifier, service_routine in pairs(SERVICES_ROUTINES) do
+            if service_routine ~= nil then
+                coroutine.resume(service_routine, table.unpack(event))
             end
         end
     end
 
     -- Shutdown time : shutdown all services
 
-    for name, enabled in pairs(enumerate_services()) do
+    local stop_coroutines = {}
+    for identifier, enabled in pairs(SERVICES) do
         if enabled then
-            local ok, err = shutdown_service(name)
-            if not ok then
-                services.log("Service '"..name.."' crashed at system shutdown:\n"..err)
+            local coro = coroutine.create(stop_service)
+            table.insert(stop_coroutines, coro)
+            coroutine.resume(coro, identifier)
+        end
+    end
+
+    local remaining = true
+    local event = {"tick"}
+    while remaining do
+        remaining = false
+        for identifier, service_routine in pairs(SERVICES_ROUTINES) do
+            if service_routine ~= nil and SERVICES_STATUS[identifier] ~= services.STATUS.DISABLED then
+                coroutine.resume(service_routine, table.unpack(event))
+            end
+            if service_routine ~= nil and SERVICES_STATUS[identifier] ~= services.STATUS.DISABLED then
+                remaining = true
             end
         end
+        for _, stop_coro in ipairs(stop_coroutines) do
+            if coroutine.status(stop_coro) ~= "dead" then
+                coroutine.resume(stop_coro, table.unpack(event))
+            end
+            if coroutine.status(stop_coro) ~= "dead" then
+                remaining = true
+            end
+        end
+        event = {coroutine.yield()}
     end
 
     kernel.mark_routine_offline()
@@ -2839,6 +3600,237 @@ local function main()
 end
 
 return main]],
+[[--]].."[["..[[
+The template for a LuxOS app.
+
+A LuxOS application file is a lua script file that returns an Application object. It must not run the application when executed.
+When LuxOS starts the application, it will execute this file, retrieve the Application object and run its main functions with the arguments passed through the command line.
+Here is an example of an echo application:
+
+local function main(...)
+    print(...)
+end
+
+local app = Application:new{"echo", main}
+
+return app
+]].."]]"..[[
+
+
+
+
+
+---@class Application The interface for an application.
+---@field name string The application name.
+---@field main function The application entry point. This function receives as argument the paramters passed to the command line (one string argument each).
+---@field autocomplete function An autocompletion function for when typing a command with the application as first keyword. Arguments received are the different words in the command line being written. Returns a list of possible strings to complete the current word.
+---@field services Service[] A list of services declared by the application.
+local Application = {}
+_G.Application = Application
+
+Application.__index =  Application
+Application.__name = "Application"
+
+
+
+
+
+---A dummy autocomplete function that does not return anything.
+local function dummy_autocomplete(...)
+    return {}
+end
+
+
+
+
+
+---Creates a new Application object
+---@param name string The application name.
+---@param main function The application main function.
+---@return Application app The new application object.
+function Application:new(name, main)
+    local app = {}
+    setmetatable(app, self)
+    if type(name) ~= "string" then
+        error("bad argument #1: string expected, got '"..type(name).."'", 2)
+    end
+    if type(main) ~= "function" then
+        error("bag argument #2: function expected, got '"..type(main).."'", 2)
+    end
+    app.name = name
+    app.main = main
+    app.services = {}
+    app.autocomplete = dummy_autocomplete
+    return app
+end
+
+
+
+
+
+---Starts the application.
+---@param ... string The arguments for the application.
+function Application:__call(...)
+    return self.main(...)
+end]],
+[[--]].."[["..[[
+This is LuxOS Object-Oriented standart library.
+]].."]]"..[[
+
+
+
+
+
+kernel.panic_pcall("dofile", dofile, "LuxOS/standart_library/path.lua")
+kernel.panic_pcall("dofile", dofile, "LuxOS/standart_library/app.lua")
+
+
+
+
+
+local base_type = type
+
+---Returns the type of the given object as a string.
+---@param obj any The object for which the type should be evaluated.
+---@return type string The object type.
+function _G.type(obj)
+    if base_type(obj) == "table" and base_type(obj.__name) == "string" then
+        return obj.__name
+    end
+    return base_type(obj)
+end
+
+
+
+
+
+return {
+    Path = Path,
+    Application = Application
+}]],
+[[--]].."[["..[[
+This is the Path library. It declares the Path object.
+Use it to work with paths and make system calls.
+]].."]]"..[[
+
+
+
+
+
+---@class Path A path to a file.
+---@field name string The final part of the path
+---@field parts string[] The different parts of the path from root to name.
+---@field stem string The name without the suffix
+---@field suffix string The suffix of the path (ex: ".txt") if it has any.
+---@field parent Path The parent path or itself if it is a root path.
+local Path = {}
+_G.Path = Path
+
+Path.__index = Path
+Path.__name = "Path"
+
+
+---Creates a new Path object
+---@param path string? The path as a string to create. If left nil, returns the root path.
+---@return Path path_object the new Path object.
+function Path:new(path)
+    local p = {}
+    setmetatable(p, self)
+    if path == nil then
+        path = ""
+    end
+    local parts = {}
+    for part in string.gmatch(path, "([^/]+)") do
+        table.insert(parts, part)
+    end
+    p.parts = parts
+    p.name = parts[#parts] or ""
+    local find = 0
+    for i = 1, #p.name do
+        if string.sub(p.name, i, i + 1) == "." then
+            find = i
+        end
+    end
+    if find == 0 then
+        p.stem = p.name
+        p.suffix = ""
+    else
+        p.stem = string.sub(p.name, 1, find - 1)
+        p.suffix = string.sub(p.name, find)
+    end
+    if #parts == 0 then
+        p.parent = p
+    else
+        local parent = ""
+        for i = 1, #parts - 1 do
+            parent = parent.."/"..parts[i]
+        end
+        p.parent = Path:new(parent)
+    end
+    return p
+end
+
+
+
+
+function Path:__tostring()
+    local s = ""
+    for index, part in ipairs(self.parts) do
+        s = s..part
+        if index < #self.parts then
+            s = s.."/"
+        end
+    end
+    return s
+end
+
+
+
+
+
+function Path:exists()
+    
+end
+
+
+
+
+
+function Path:is_file()
+    
+end
+
+
+
+
+
+function Path:is_dir()
+    
+end
+
+
+
+
+
+function Path:mkdir(exists_ok, parents)
+    
+end
+
+
+
+
+
+function Path:touch(exists_ok)
+    
+end
+
+
+
+
+
+function Path:open(mode)
+    
+end]],
 [[--]].."[["..[[
 This library is used by the kernel to define and hook system calls.
 ]].."]]"..[[
@@ -2851,6 +3843,8 @@ _G.syscall = {}     -- The Lux syscall API. Mostly restricted to kernel.
 libraries.syscall = syscall
 local syscall_table = {}    ---@type {[string] : SysCall} The system call table.
 local syscall_routines = {} ---@type {[string] : thread} The table of kernel routines that handle the system calls.
+
+local check_kernel_space_before_running = kernel.check_kernel_space_before_running
 
 
 ---@class SysCall The class for system call objects. These are special function accessible for the user that jump back into kernel space.
@@ -2867,7 +3861,7 @@ SysCall.__name = "syscall"
 ---@param syscallinfo [string, fun(... : P) : R] The required parameters for creating a syscall: a name and the user function.
 ---@return SysCall syscall The new system call object.
 function SysCall:new(syscallinfo)
-    kernel.check_kernel_space_before_running()
+    check_kernel_space_before_running()
     local syscall = {name = syscallinfo[1], __user_func = syscallinfo[2]}
     if type(syscall.name) ~= "string" then
         kernel.panic("SysCall's 'name' field should be a string, not '"..type(syscall.name).."'", 1)
@@ -2986,7 +3980,7 @@ end
 ---@param func F The user function.
 ---@return F syscall system call wrapped function.
 function syscall.new(name, func)
-    kernel.check_kernel_space_before_running()
+    check_kernel_space_before_running()
     return SysCall:new{name, func}
 end
 
@@ -2999,7 +3993,7 @@ end
 ---@param syscall SysCall The system call to affect this routine to.
 ---@param handler_func function The function that will handle all incomming system calls.
 function syscall.affect_routine(syscall, handler_func)
-    kernel.check_kernel_space_before_running()
+    check_kernel_space_before_running()
     if syscall_routines[syscall.name] ~= nil then
         kernel.panic("Syscall '"..syscall.name.."' routine has already been affected.", 1)
     end
@@ -3037,7 +4031,7 @@ end
 
 ---Validates the system call table when the system is about to start. It ensures that each system call has a handler and routine.
 function syscall.validate_syscall_table()
-    kernel.check_kernel_space_before_running()
+    check_kernel_space_before_running()
     for name, syscall in pairs(syscall_table) do
         if syscall_routines[name] == nil then
             kernel.panic("SysCall '"..syscall.name.."' has not routine affected to it!")
@@ -3058,7 +4052,7 @@ function syscall.table()
     end
     return table
 end]]
-}
+}   -- This too
 
 local function install(node, parent_path)
     if node.type == DIRECTORY then
@@ -3072,7 +4066,7 @@ local function install(node, parent_path)
         local path = parent_path..node.name
         if not fs.exists(path) then
             local content = raw_package[node.code]
-            print("Installing file '"..path.."'...")
+            print_color(colors.yellow, "Installing file '"..path.."'...")
             local file = fs.open(path, "w")
             file.write(content)
             file.close()
@@ -3082,7 +4076,7 @@ end
 
 install(package, "")
 
-print("Installation is finished. Press any key to boot LuxOS.")
+print_color(colors.cyan, "Installation is finished. Press any key to boot LuxOS.")
 while true do
     local event = coroutine.yield()
     if event == "key" then

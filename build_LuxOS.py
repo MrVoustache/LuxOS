@@ -68,48 +68,10 @@ def dump_package(node : DirNode | FileNode) -> str:
 
 package_root = package_node(LUX_FOLDER)
 
-lua_installer = """local DIRECTORY = 1
-local FILE = 2
-local ENTRY_POINT = "LuxOS/main.lua"
-
-local package = {package_dump}
-
-local raw_package = {raw_package_content}
-
-local function install(node, parent_path)
-    if node.type == DIRECTORY then
-        if not fs.exists(parent_path..node.name) then
-            fs.makeDir(parent_path..node.name)
-        end
-        for _, child in ipairs(node.children) do
-            install(child, parent_path..node.name.."/")
-        end
-    elseif node.type == FILE then
-        local path = parent_path..node.name
-        if not fs.exists(path) then
-            local content = raw_package[node.code]
-            print("Installing file '"..path.."'...")
-            local file = fs.open(path, "w")
-            file.write(content)
-            file.close()
-        end
-    end
-end
-
-install(package, "")
-
-print("Installation is finished. Press any key to boot LuxOS.")
-while true do
-    local event = coroutine.yield()
-    if event == "key" then
-        break
-    end
-end
-
-dofile(ENTRY_POINT)""".format(
+lua_installer = (Path(__file__).parent / "installer_template.lua").read_text().format(
     package_dump = dump_package(package_root),
     raw_package_content = "{\n" + ",\n".join(f"[[{content}]]" for content in contents) + "\n}"
     )
 
-with open("install.lua", "w") as f:
+with open("installer.lua", "w") as f:
     f.write(lua_installer)
