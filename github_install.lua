@@ -10,7 +10,7 @@ local code = response.getResponseCode()
 
 if code ~= 200 then
     print_color(colors.red, "Error response from github ("..code.."):")
-    print(response.readAll())
+    print_color(colors.orange, response.readAll())
     return
 end
 
