@@ -44,7 +44,7 @@ function SysCall:new(syscallinfo)
     return syscall
 end
 
-local ongoing_calls = {}    ---@type string[] The ongoing system call pile.
+local ongoing_calls = {}    ---@type string[] The ongoing system call stack.
 
 ---Calls the user function
 ---@param ... any
@@ -55,13 +55,19 @@ function SysCall:__call(...)
     local ok = table.remove(res, 1)
     local exiting_call = table.remove(ongoing_calls)
     if exiting_call ~= self.name then
-        kernel.panic("Corrupted system call pile: exited a call of '"..exiting_call.."' where '"..self.name.."' was expected.", 1)
+        kernel.panic("Corrupted system call stack: exited a call of '"..exiting_call.."' where '"..self.name.."' was expected.", 1)
     end
     if not ok then
         error(res[1], 0)
     else
         return table.unpack(res)
     end
+end
+
+---Implements tostring(self)
+---@return string
+function SysCall:__tostring()
+    return type(self).." "..self.name
 end
 
 
@@ -93,7 +99,7 @@ kernel.promote_coroutine(report_syscall_crash_coro)
 function syscall.trampoline(...)
     if #ongoing_calls == 0 then
         if kernel.kernel_space() then
-            kernel.panic("Corrupted system call pile: syscall.trampoline() called with no running system calls.", 1)
+            kernel.panic("Corrupted system call stack: syscall.trampoline() called with no running system calls.", 1)
         else
             error("This function can only be called from inside a system call.", 2)
         end

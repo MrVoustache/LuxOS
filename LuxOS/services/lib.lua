@@ -174,15 +174,15 @@ end
 
 function Service:__tostring()
     if self:status() == STATUS.RUNNING then
-        return "Service '"..self.name.."' [running]"
+        return type(self).." '"..self.name.."' [running]"
     elseif self:status() == STATUS.STOPPING then
-        return "Service '"..self.name.."' [stopping]"
+        return type(self).." '"..self.name.."' [stopping]"
     elseif self:status() == STATUS.STARTING then
-        return "Service '"..self.name.."' [starting]"
+        return type(self).." '"..self.name.."' [starting]"
     elseif self:status() == STATUS.DISABLED then
-        return "Service '"..self.name.."' [disabled]"
+        return type(self).." '"..self.name.."' [disabled]"
     else
-        return "Service '"..self.name.."' [unknown]"
+        return type(self).." '"..self.name.."' [unknown]"
     end
 end
 
