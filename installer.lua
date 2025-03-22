@@ -496,7 +496,7 @@ local function main()
 
 end
 
-return main]],
+return main, 1]],
 [[--]].."[["..[[
 This is the library to handle the boot sequence of LuxOS. By default, this directly lauches the operating system but it can be changed.
 ]].."]]"..[[
@@ -887,7 +887,9 @@ end
 
 
 
-local routine_coroutines = {}   ---@type {[string] : thread}
+local routine_coroutines = {}   ---@type [string, thread][]
+local routine_names = {}        ---@type {[string] : thread}
+local routines_priority = {}    ---@type {[string] : integer}
 local current_routine = nil     ---@type string?
 local routines_ready = {}       ---@type {[string] : boolean}
 local routines_offline = {}     ---@type {[string] : boolean}
@@ -896,7 +898,8 @@ local private_event = {}        ---@type {[string] : string}
 ---Register a new system routine. Only called by the main scheduler.
 ---@param name string The name of the coroutine.
 ---@param coro thread The coroutine object itself.
-function kernel.register_routine(name, coro)
+---@param priority integer The execution priority of the routine. The lower the number, the higher the priority. 0 is the highest priority.
+function kernel.register_routine(name, coro, priority)
     check_kernel_space_before_running()
     kernel.promote_coroutine(coro)
     for iname, icoro in pairs(routine_coroutines) do
@@ -904,9 +907,21 @@ function kernel.register_routine(name, coro)
             kernel.panic("Routine '"..name.."' has already been registered.")
         end
     end
-    routine_coroutines[name] = coro
     routines_ready[name] = false
     routines_offline[name] = false
+    routines_priority[name] = priority
+    routine_names[name] = coro
+    local ok = false
+    for i, coro_data in ipairs(routine_coroutines) do
+        if routines_priority[coro_data[1]].."]]"..[[ > priority then
+            table.insert(routine_coroutines, i, {name, coro})
+            ok = true
+            break
+        end
+    end
+    if not ok then
+        table.insert(routine_coroutines, {name, coro})
+    end
 end
 
 ---Sets the name of the currently running routine.
@@ -928,7 +943,7 @@ function kernel.current_routine()
 end
 
 ---Returns a dictionnary of all the existing routines.
----@return { [string]: thread } routines The existing routine, indexed by names.
+---@return [string, thread][] routines The existing routines, indexed by priority.
 function kernel.routines()
     check_kernel_space_before_running()
     return routine_coroutines
@@ -946,11 +961,11 @@ end
 
 ---Returns a table of the routines to run for a given event.
 ---@param event_name string The name of the event to get the routines for.
----@return {[string] : thread} routines The routines to run for the event.
+---@return [string, thread][] routines The routines to run for the event.
 function kernel.get_routines_for_event(event_name)
     check_kernel_space_before_running()
     if private_event[event_name] ~= nil then
-        return {[private_event[event_name]].."]]"..[[ = routine_coroutines[private_event[event_name]].."]]"..[[}
+        return {{private_event[event_name], routine_names[private_event[event_name]].."]]"..[[}}
     else
         return kernel.routines()
     end
@@ -986,16 +1001,16 @@ end
 
 ---Returns an array of the routines that have yet to finish startup.
 ---@param event_name string The name of the event to get the routines for.
----@return {[string] : thread} not_ready The routines' coroutines to run to finish startup.
+---@return [string, thread][] not_ready The routines' coroutines to run to finish startup.
 function kernel.starting_routines(event_name)
     check_kernel_space_before_running()
     if private_event[event_name] ~= nil and not routines_ready[private_event[event_name]].."]]"..[[ then
-        return {[private_event[event_name]].."]]"..[[ = routine_coroutines[private_event[event_name]].."]]"..[[}
+        return {{private_event[event_name], routine_names[private_event[event_name]].."]]"..[[}}
     end
     local not_ready = {}
-    for name, ready in pairs(routines_ready) do
-        if not ready then
-            not_ready[name] = routine_coroutines[name]
+    for i, coro_data in ipairs(routine_coroutines) do
+        if not routines_ready[coro_data[1]].."]]"..[[ then
+            table.insert(not_ready, {coro_data[1], coro_data[2]})
         end
     end
     return not_ready
@@ -1033,16 +1048,16 @@ end
 
 ---Returns an array of the routines that have yet to finish shutting down.
 ---@param event_name string The name of the event to get the routines for.
----@return {[string] : thread} not_ready The routines' coroutines to run to finish shutdown.
+---@return [string, thread][] not_ready The routines' coroutines to run to finish shutdown.
 function kernel.disconnecting_routines(event_name)
     check_kernel_space_before_running()
     if private_event[event_name] ~= nil and not routines_offline[private_event[event_name]].."]]"..[[ then
-        return {[private_event[event_name]].."]]"..[[ = routine_coroutines[private_event[event_name]].."]]"..[[}
+        return {{private_event[event_name], routine_names[private_event[event_name]].."]]"..[[}}
     end
     local not_offline = {}
-    for name, offline in pairs(routines_offline) do
-        if not offline then
-            not_offline[name] = routine_coroutines[name]
+    for i, coro_data in ipairs(routine_coroutines) do
+        if not routines_offline[coro_data[1]].."]]"..[[ then
+            table.insert(not_offline, {coro_data[1], coro_data[2]})
         end
     end
     return not_offline
@@ -1498,6 +1513,8 @@ function os.reinstall()
 end]],
 [[--]].."[["..[[
 This is the standart LuxNet service API. It contains all the functions to communicate with other machines running on LuxOS.
+
+Use luxnet() to create a new LuxNet context.
 ]].."]]"..[[
 
 _G.luxnet = {}      -- The LuxNet API. Allows you to communicate with other machines running LuxOS.
@@ -1764,7 +1781,19 @@ end
 
 
 function LuxNetContext:__tostring()
-    return "LuxNetContext{frequency=" .. self.frequency .. ", send_timeout=" .. self.send_timeout .. ", receive_timeout=" .. self.receive_timeout .. ", time_to_live=" .. self.time_to_live .. ", protocol=" .. self.protocol .. ", recveive_broadcasts=" .. tostring(self.recveive_broadcasts) .. "}"
+    local receive_timeout = "inf"
+    if self.receive_timeout ~= nil then
+        receive_timeout = tostring(self.receive_timeout)
+    end
+    local time_to_live = "inf"
+    if self.time_to_live ~= nil then
+        time_to_live = tostring(self.time_to_live)
+    end
+    local protocol = "nil"
+    if self.protocol ~= nil then
+        protocol = "'"..self.protocol.."'"
+    end
+    return "LuxNetContext{frequency=" .. self.frequency .. ", send_timeout=" .. self.send_timeout .. ", receive_timeout=" .. receive_timeout .. ", time_to_live=" .. time_to_live .. ", protocol=" .. protocol .. "}"
 end
 
 ---Sends a message to another machine.
@@ -1818,6 +1847,19 @@ end
 ---@param protocol string? The protocol to use to send the message. Can be nil for no protocol.
 function LuxNetContext:set_protocol(protocol)
     self.protocol = protocol
+end
+
+
+
+
+
+local luxnet_metatable = table.copy(table)
+setmetatable(luxnet, luxnet_metatable)
+
+---Shortcut for creating a new LuxNet context.
+---@return LuxNetContext context The new LuxNetContext object.
+function luxnet_metatable:__call(...)
+    return LuxNetContext:new(...)
 end
 
 
@@ -2492,7 +2534,7 @@ local function run_shell()
 
 end
 
-return run_shell]],
+return run_shell, 1]],
 [[--]].."[["..[[
 LuxOS shell. Runs LuxOS applications.
 ]].."]]"..[[
@@ -2697,21 +2739,27 @@ local function run_everything()
             libraries[name] = lib
         end
     end
-
     for package_name, routine_path in pairs(routines) do
-        local routine_main = kernel.panic_pcall("dofile", dofile, routine_path)
+        local routine_main, routine_priority = kernel.panic_pcall("dofile", dofile, routine_path)
         if type(routine_main) ~= "function" then
             kernel.panic("Routine loader of package '"..package_name.."' did not return a function.'")
         end
+        if routine_priority == nil then
+            routine_priority = 0
+        end
+        if type(routine_priority) ~= "number" then
+            kernel.panic("Routine loader of package '"..package_name.."' returned a non-number priority.")
+        end
         local coro = coroutine.create(routine_main)
-        kernel.register_routine(package_name, coro)
+        kernel.register_routine(package_name, coro, routine_priority)
     end
 
     -- Start runtime : wait for all routines to be ready.
 
     local event = {}
     while true do
-        for name, coro in pairs(kernel.starting_routines("")) do
+        for i, coro_data in ipairs(kernel.starting_routines("")) do
+            local name, coro = coro_data[1], coro_data[2]
             -- print("Resuming starting routine '"..name.."' with '"..tostring(event[1]).."' event.")
             kernel.set_current_routine(name)
             local ok, err = coroutine.resume(coro, table.unpack(event))
@@ -2733,7 +2781,8 @@ local function run_everything()
     -- Normal runtime : everyone runs as if the world had no end
 
     while event[1] ~= "shutdown" do
-        for name, coro in pairs(kernel.get_routines_for_event(event[1])) do
+        for i, coro_data in ipairs(kernel.get_routines_for_event(event[1])) do
+            local name, coro = coro_data[1], coro_data[2]
             -- print("Resuming routine '"..name.."' with '"..tostring(event[1]).."' event.")
             kernel.set_current_routine(name)
             local ok, err = coroutine.resume(coro, table.unpack(event))
@@ -2753,7 +2802,8 @@ local function run_everything()
     local shutdown_info = {table.unpack(event, 2)}
 
     while true do
-        for name, coro in pairs(kernel.disconnecting_routines(event[1])) do
+        for i, coro_data in ipairs(kernel.disconnecting_routines(event[1])) do
+            local name, coro = coro_data[1], coro_data[2]
             -- print("Resuming disconnecting routine '"..name.."' with '"..tostring(event[1]).."' event.")
             kernel.set_current_routine(name)
             local ok, err = coroutine.resume(coro, table.unpack(event))
@@ -3911,7 +3961,7 @@ local function main()
 
 end
 
-return main]],
+return main, 1]],
 [[--]].."[["..[[
 The template for a LuxOS app.
 
@@ -4010,6 +4060,20 @@ function _G.type(obj)
         return obj.__name
     end
     return base_type(obj)
+end
+
+
+
+
+
+---Returns a copy of the table.
+---@return table The copy of the table.
+function table:copy()
+    local cp = {}
+    for k, v in pairs(self) do
+        cp[k] = v
+    end
+    return cp
 end
 
 
