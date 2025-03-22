@@ -1,5 +1,7 @@
 --[[
 This is the standart LuxNet service API. It contains all the functions to communicate with other machines running on LuxOS.
+
+Use luxnet() to create a new LuxNet context.
 ]]
 
 _G.luxnet = {}      -- The LuxNet API. Allows you to communicate with other machines running LuxOS.
@@ -266,7 +268,19 @@ end
 
 
 function LuxNetContext:__tostring()
-    return "LuxNetContext{frequency=" .. self.frequency .. ", send_timeout=" .. self.send_timeout .. ", receive_timeout=" .. self.receive_timeout .. ", time_to_live=" .. self.time_to_live .. ", protocol=" .. self.protocol .. ", recveive_broadcasts=" .. tostring(self.recveive_broadcasts) .. "}"
+    local receive_timeout = "inf"
+    if self.receive_timeout ~= nil then
+        receive_timeout = tostring(self.receive_timeout)
+    end
+    local time_to_live = "inf"
+    if self.time_to_live ~= nil then
+        time_to_live = tostring(self.time_to_live)
+    end
+    local protocol = "nil"
+    if self.protocol ~= nil then
+        protocol = "'"..self.protocol.."'"
+    end
+    return "LuxNetContext{frequency=" .. self.frequency .. ", send_timeout=" .. self.send_timeout .. ", receive_timeout=" .. receive_timeout .. ", time_to_live=" .. time_to_live .. ", protocol=" .. protocol .. "}"
 end
 
 ---Sends a message to another machine.
@@ -320,6 +334,19 @@ end
 ---@param protocol string? The protocol to use to send the message. Can be nil for no protocol.
 function LuxNetContext:set_protocol(protocol)
     self.protocol = protocol
+end
+
+
+
+
+
+local luxnet_metatable = table.copy(table)
+setmetatable(luxnet, luxnet_metatable)
+
+---Shortcut for creating a new LuxNet context.
+---@return LuxNetContext context The new LuxNetContext object.
+function luxnet_metatable:__call(...)
+    return LuxNetContext:new(...)
 end
 
 
