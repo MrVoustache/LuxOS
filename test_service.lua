@@ -13,6 +13,7 @@ end
 local function main()
     while running do
         sleep(10)
+        services.log("Saying hello!")
         luxnet.broadcast("Hello!")
     end
 end

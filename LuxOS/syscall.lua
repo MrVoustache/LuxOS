@@ -152,9 +152,10 @@ end
 ---@param result fun() : boolean, R | string The result function. Should return true and any value on success and false plus an error message on error.
 ---@param terminable boolean? If true, the awaitable breaks if a terminate event is received. Defaults to false.
 ---@param pre_complete (fun():nil)? An optional function that will be called when the condition is complete.
+---@param clean_up (fun():nil)? An optional function that will be called when the generator is destroyed.
 ---@return fun() : boolean, R | string awaitable An awaitable function that will block until the condition is met and will return any value returned. Should be return by the trampoline.
 ---@return fun() : nil completion A non-blocking function that should be called by the kernel when the condition should be checked.
-function syscall.await(condition, result, terminable, pre_complete)
+function syscall.await(condition, result, terminable, pre_complete, clean_up)
     check_kernel_space_before_running()
     if terminable == nil then
         terminable = false
@@ -164,24 +165,107 @@ function syscall.await(condition, result, terminable, pre_complete)
         while not condition() do
             local event = coroutine.yield()
             if terminable and event == "terminate" then
+                if clean_up ~= nil then
+                    clean_up()
+                end
                 return false, "terminated"
             end
         end
-        return result()
+        local res = result()
+        if clean_up ~= nil then
+            clean_up()
+        end
+        return res
     end)
 
     kernel.promote_coroutine(await_coro)
 
     local function awaitable()
-        local event = {}
+        local event = {n = 0}
         while true do
-            local res = {coroutine.resume(await_coro, table.unpack(event))}
+            local res = table.pack(coroutine.resume(await_coro, table.unpack(event, 1, event.n)))
             local ok = table.remove(res, 1)
             if not ok then
                 kernel.panic("Awaitable syscall coroutine had an exception: "..res[1])
             end
             if coroutine.status(await_coro) == "dead" then
-                return table.unpack(res)
+                return table.unpack(res, 1, res.n - 1)
+            end
+            event = table.pack(coroutine.yield())
+        end
+    end
+
+    local function completion()
+        lux.make_tick()
+        if pre_complete ~= nil then
+            pre_complete()
+        end
+    end
+
+    return awaitable, completion
+end
+
+
+
+
+
+---Creates an awaitable generator for syscalls to use when a syscall should yield values and possibly block to yield the next one.
+---@generic R : any The yield type of the awaitable
+---@param condition fun() : boolean The condition checking function. Returns true if the condition is met and a value can be yielded, false otherwise.
+---@param result fun() : boolean, R | string | nil The result function. Should return true and any value on success and false plus an error message on error. Will be called for each yield. Should return true and nil when no more values are available.
+---@param terminable boolean? If true, the awaitable breaks if a terminate event is received. Defaults to false.
+---@param pre_complete (fun():nil)? An optional function that will be called each time the condition is complete.
+---@param clean_up (fun():nil)? An optional function that will be called when the generator is destroyed.
+---@return fun() : boolean?, R | string | nil awaitable An awaitable function that will block until the condition is met and will return the yield value. Can be called multiple as long as yield values are available. Returns nil when no more values are available.
+---@return fun() : nil completion A non-blocking function that should be called by the kernel when the condition should be checked. Might not be called if the awaitable does not have to block.
+function syscall.await_gen(condition, result, terminable, pre_complete, clean_up)
+    check_kernel_space_before_running()
+    if terminable == nil then
+        terminable = false
+    end
+
+    local await_coro = coroutine.create(function ()
+        while true do
+            local event
+            while not condition() do
+                event = coroutine.yield()
+                if terminable and event == "terminate" then
+                    if clean_up ~= nil then
+                        clean_up()
+                    end
+                    return false, "terminated"
+                end
+            end
+            local res = table.pack(result())
+            local ok = table.remove(res, 1)
+            if not ok then
+                if clean_up ~= nil then
+                    clean_up()
+                end
+                return false, res[1]
+            end
+            event = coroutine.yield(true, table.unpack(res, 1, res.n - 1))
+        end
+    end)
+
+    kernel.promote_coroutine(await_coro)
+
+    local function awaitable()
+        if coroutine.status(await_coro) == "dead" then
+            return nil
+        end
+        local event = {n = 0}
+        while true do
+            local res = table.pack(coroutine.resume(await_coro, table.unpack(event, 1, event.n)))
+            local ok = table.remove(res, 1)
+            if not ok then
+                kernel.panic("Awaitable syscall coroutine had an exception: "..res[1])
+            end
+            ok = table.remove(res, 1)
+            if ok == false then
+                error(res[1], 2)
+            elseif ok == true then
+                return table.unpack(res, 1, res.n - 2)
             end
             event = table.pack(coroutine.yield())
         end

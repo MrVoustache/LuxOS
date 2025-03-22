@@ -3231,28 +3231,27 @@ end
 
 
 
-services.get_logs = syscall.new(
+services.read_logs = syscall.new(
     "services.get_logs",
-    ---Returns the logs of the service with the given identifier.
+    ---Returns the logs of the service with the given identifier. Returns a function that returns the next log entry each time it is called. Blocks if the service is still running and all logs have been read. Return nil when all logs have been read and the service is stopped.
     ---@param identifier integer | Service The service identifier. Can also be a Service object.
-    ---@return {[number]: string} logs The logs of the service a table of logs indexed by time.
+    ---@return fun(): string? logs_reader The logs of the service as a function that returns the next log entry.
     function (identifier)
         if type(identifier) == "Service" then
             identifier = identifier.identifier
         end
-        local ok, err = syscall.trampoline(identifier)
-        if ok then
-            return err
-        else
-            error(err, 2)
+        local ok, err_or_awaitable = syscall.trampoline(identifier)
+        if not ok then
+            error(err_or_awaitable, 2)
         end
+        return err_or_awaitable
     end
 )
 
 ---Enables the service associated with the Service object.
----@return {[number]: string} logs The logs of the service a table of logs indexed by time.
-function Service:get_logs()
-    return services.get_logs(self)
+---@return fun(): string logs_reader The logs of the service as a function that returns the next log entry.
+function Service:read_logs()
+    return services.read_logs(self)
 end
 
 
@@ -3302,6 +3301,9 @@ local SERVICES_LOG_FILES = {}                           ---@type {[integer]: han
 local SERVICES_STOP_CALLBACKS = {}                      ---@type {[integer]: (fun():nil)[]} A routine for each service being stopped. Will be resumed when the service stops.
 local SERVICE_STOP_STATUS = true                        ---@type boolean Indicates if the service that just stopped did stop gracefully.
 local SERVICES_STATUS = {}                              ---@type {[integer]: STATUS} The status of each service.
+local SERVICES_READING_LOGS = {}                        ---@type {[integer]: integer} Indicates how many readers are waiting for logs for each service.
+local SERVICES_LOG_CALLBACKS = {}                       ---@type {[integer]: (fun():nil)[]} A list of callbacks for each service that is waiting for logs.
+local SERVICES_LAST_LOG = nil                           ---@type string? The last service log made.
 local CURRENT_SERVICE = nil                             ---@type integer? The currently running service.
 local DISPLAY_NAME = "service manager"                  ---@type string The name to display on logs.
 local log = services.log
@@ -3596,6 +3598,8 @@ local function load_service(filepath, identifier)
     SERVICES_ROUTINES[identifier] = coroutine.create(run_service)
     SERVICES_STOP_CALLBACKS[identifier] = {}
     SERVICES_STATUS[identifier] = services.STATUS.DISABLED
+    SERVICES_READING_LOGS[identifier] = 0
+    SERVICES_LOG_CALLBACKS[identifier] = {}
     kernel.promote_coroutine(SERVICES_ROUTINES[identifier])
     coroutine.resume(SERVICES_ROUTINES[identifier], identifier)
     if save then
@@ -3630,6 +3634,8 @@ local function unload_service(identifier)
     SERVICES_ROUTINES[identifier] = nil
     SERVICES_STOP_CALLBACKS[identifier] = nil
     SERVICES_STATUS[identifier] = nil
+    SERVICES_READING_LOGS[identifier] = nil
+    SERVICES_LOG_CALLBACKS[identifier] = nil
 end
 
 
@@ -3679,8 +3685,16 @@ local function answer_calls_to_log(...)
         if SERVICES_LOG_FILES[CURRENT_SERVICE] == nil then
             return false, "service #"..CURRENT_SERVICE.." is unknown or not running"
         end
-        SERVICES_LOG_FILES[CURRENT_SERVICE].write(os.time()..", "..os.day()..", "..textutils.serialise("["..DISPLAY_NAME.."] "..message).."\n")
+        local full_message = "day "..os.day()..": "..textutils.formatTime(os.time())..", "..textutils.serialise("["..DISPLAY_NAME.."] "..message)
+        SERVICES_LOG_FILES[CURRENT_SERVICE].write(full_message.."\n")
         SERVICES_LOG_FILES[CURRENT_SERVICE].flush()
+        SERVICES_LAST_LOG = full_message
+        if SERVICES_READING_LOGS[CURRENT_SERVICE] > 0 then
+            for _, cb in ipairs(SERVICES_LOG_CALLBACKS[CURRENT_SERVICE]) do
+                cb()
+            end
+        end
+        SERVICES_LAST_LOG = nil
         return true
     end
 end
@@ -3853,6 +3867,60 @@ end
 ---Answers the system calls to services.read_logs.
 local function answer_calls_to_read_logs(...)
     local args = table.pack(...)
+    if #args ~= 1 then
+        return false, "expected exactly one argument, got "..#args
+    else
+        local identifier = args[1]      ---@type integer | Service
+        if type(identifier) == "Service" then
+            identifier = identifier.identifier
+        end
+        if type(identifier) ~= "number" then
+            return false, "bad argument #1: integer or Service expected, got '"..type(identifier).."'"
+        end
+        if SERVICES[identifier] == nil then
+            return false, "unknown service identifier: "..identifier
+        end
+        local next_logs = {}     ---@type string[]
+        SERVICES_READING_LOGS[identifier] = SERVICES_READING_LOGS[identifier] + 1
+        local callback_identifier = #SERVICES_LOG_CALLBACKS[identifier] + 1
+        local function clean_up()
+            SERVICES_READING_LOGS[identifier] = SERVICES_READING_LOGS[identifier] - 1
+            SERVICES_LOG_CALLBACKS[identifier][callback_identifier] = nil
+        end
+        print("Now, "..SERVICES_READING_LOGS[identifier].." are reading logs for service #"..identifier)
+        local awaitable, complete = syscall.await_gen(
+            function ()
+                return #next_logs > 0 or SERVICES_STATUS[identifier] == services.STATUS.DISABLED
+            end,
+            function ()
+                if #next_logs == 0 then
+                    clean_up()
+                    return true, nil
+                else
+                    return true, table.remove(next_logs, 1)
+                end
+            end,
+            true,
+            function ()
+                table.insert(next_logs, SERVICES_LAST_LOG)
+            end,
+            clean_up
+        )
+        SERVICES_LOG_CALLBACKS[identifier][callback_identifier] = complete
+
+        if kernel.panic_pcall("fs.exists", fs.exists, SERVICES_LOGS..identifier..".log") then
+            local file = kernel.panic_pcall("fs.open", fs.open, SERVICES_LOGS..identifier..".log", "r")
+            if file == nil then
+                kernel.panic("could not open log file for service #"..identifier)
+            end
+            for line in file.readLine do
+                table.insert(next_logs, line)
+            end
+            file.close()
+        end
+
+        return true, awaitable
+    end
 end
 
 ---Answers the system calls to services.reload.
@@ -3876,7 +3944,7 @@ local function answer_calls_to_reload(...)
         end
         local filepath = SERVICES_FILEPATHS[identifier]
         unload_service(identifier)
-        local ok, err = load_service(filepath, identifier)
+        local ok, err = load_service(tostring(filepath), identifier)
         if not ok then
             return false, err
         end
@@ -3899,7 +3967,7 @@ local function main()
     syscall.affect_routine(services.status, answer_calls_to_status)
     syscall.affect_routine(services.enable, answer_calls_to_enable)
     syscall.affect_routine(services.disable, answer_calls_to_disable)
-    syscall.affect_routine(services.get_logs, answer_calls_to_read_logs)
+    syscall.affect_routine(services.read_logs, answer_calls_to_read_logs)
     syscall.affect_routine(services.reload, answer_calls_to_reload)
 
     kernel.mark_routine_ready()
@@ -4361,9 +4429,10 @@ end
 ---@param result fun() : boolean, R | string The result function. Should return true and any value on success and false plus an error message on error.
 ---@param terminable boolean? If true, the awaitable breaks if a terminate event is received. Defaults to false.
 ---@param pre_complete (fun():nil)? An optional function that will be called when the condition is complete.
+---@param clean_up (fun():nil)? An optional function that will be called when the generator is destroyed.
 ---@return fun() : boolean, R | string awaitable An awaitable function that will block until the condition is met and will return any value returned. Should be return by the trampoline.
 ---@return fun() : nil completion A non-blocking function that should be called by the kernel when the condition should be checked.
-function syscall.await(condition, result, terminable, pre_complete)
+function syscall.await(condition, result, terminable, pre_complete, clean_up)
     check_kernel_space_before_running()
     if terminable == nil then
         terminable = false
@@ -4373,24 +4442,107 @@ function syscall.await(condition, result, terminable, pre_complete)
         while not condition() do
             local event = coroutine.yield()
             if terminable and event == "terminate" then
+                if clean_up ~= nil then
+                    clean_up()
+                end
                 return false, "terminated"
             end
         end
-        return result()
+        local res = result()
+        if clean_up ~= nil then
+            clean_up()
+        end
+        return res
     end)
 
     kernel.promote_coroutine(await_coro)
 
     local function awaitable()
-        local event = {}
+        local event = {n = 0}
         while true do
-            local res = {coroutine.resume(await_coro, table.unpack(event))}
+            local res = table.pack(coroutine.resume(await_coro, table.unpack(event, 1, event.n)))
             local ok = table.remove(res, 1)
             if not ok then
                 kernel.panic("Awaitable syscall coroutine had an exception: "..res[1])
             end
             if coroutine.status(await_coro) == "dead" then
-                return table.unpack(res)
+                return table.unpack(res, 1, res.n - 1)
+            end
+            event = table.pack(coroutine.yield())
+        end
+    end
+
+    local function completion()
+        lux.make_tick()
+        if pre_complete ~= nil then
+            pre_complete()
+        end
+    end
+
+    return awaitable, completion
+end
+
+
+
+
+
+---Creates an awaitable generator for syscalls to use when a syscall should yield values and possibly block to yield the next one.
+---@generic R : any The yield type of the awaitable
+---@param condition fun() : boolean The condition checking function. Returns true if the condition is met and a value can be yielded, false otherwise.
+---@param result fun() : boolean, R | string | nil The result function. Should return true and any value on success and false plus an error message on error. Will be called for each yield. Should return true and nil when no more values are available.
+---@param terminable boolean? If true, the awaitable breaks if a terminate event is received. Defaults to false.
+---@param pre_complete (fun():nil)? An optional function that will be called each time the condition is complete.
+---@param clean_up (fun():nil)? An optional function that will be called when the generator is destroyed.
+---@return fun() : boolean?, R | string | nil awaitable An awaitable function that will block until the condition is met and will return the yield value. Can be called multiple as long as yield values are available. Returns nil when no more values are available.
+---@return fun() : nil completion A non-blocking function that should be called by the kernel when the condition should be checked. Might not be called if the awaitable does not have to block.
+function syscall.await_gen(condition, result, terminable, pre_complete, clean_up)
+    check_kernel_space_before_running()
+    if terminable == nil then
+        terminable = false
+    end
+
+    local await_coro = coroutine.create(function ()
+        while true do
+            local event
+            while not condition() do
+                event = coroutine.yield()
+                if terminable and event == "terminate" then
+                    if clean_up ~= nil then
+                        clean_up()
+                    end
+                    return false, "terminated"
+                end
+            end
+            local res = table.pack(result())
+            local ok = table.remove(res, 1)
+            if not ok then
+                if clean_up ~= nil then
+                    clean_up()
+                end
+                return false, res[1]
+            end
+            event = coroutine.yield(true, table.unpack(res, 1, res.n - 1))
+        end
+    end)
+
+    kernel.promote_coroutine(await_coro)
+
+    local function awaitable()
+        if coroutine.status(await_coro) == "dead" then
+            return nil
+        end
+        local event = {n = 0}
+        while true do
+            local res = table.pack(coroutine.resume(await_coro, table.unpack(event, 1, event.n)))
+            local ok = table.remove(res, 1)
+            if not ok then
+                kernel.panic("Awaitable syscall coroutine had an exception: "..res[1])
+            end
+            ok = table.remove(res, 1)
+            if ok == false then
+                error(res[1], 2)
+            elseif ok == true then
+                return table.unpack(res, 1, res.n - 2)
             end
             event = table.pack(coroutine.yield())
         end

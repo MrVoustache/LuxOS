@@ -22,6 +22,9 @@ local SERVICES_LOG_FILES = {}                           ---@type {[integer]: han
 local SERVICES_STOP_CALLBACKS = {}                      ---@type {[integer]: (fun():nil)[]} A routine for each service being stopped. Will be resumed when the service stops.
 local SERVICE_STOP_STATUS = true                        ---@type boolean Indicates if the service that just stopped did stop gracefully.
 local SERVICES_STATUS = {}                              ---@type {[integer]: STATUS} The status of each service.
+local SERVICES_READING_LOGS = {}                        ---@type {[integer]: integer} Indicates how many readers are waiting for logs for each service.
+local SERVICES_LOG_CALLBACKS = {}                       ---@type {[integer]: (fun():nil)[]} A list of callbacks for each service that is waiting for logs.
+local SERVICES_LAST_LOG = nil                           ---@type string? The last service log made.
 local CURRENT_SERVICE = nil                             ---@type integer? The currently running service.
 local DISPLAY_NAME = "service manager"                  ---@type string The name to display on logs.
 local log = services.log
@@ -316,6 +319,8 @@ local function load_service(filepath, identifier)
     SERVICES_ROUTINES[identifier] = coroutine.create(run_service)
     SERVICES_STOP_CALLBACKS[identifier] = {}
     SERVICES_STATUS[identifier] = services.STATUS.DISABLED
+    SERVICES_READING_LOGS[identifier] = 0
+    SERVICES_LOG_CALLBACKS[identifier] = {}
     kernel.promote_coroutine(SERVICES_ROUTINES[identifier])
     coroutine.resume(SERVICES_ROUTINES[identifier], identifier)
     if save then
@@ -350,6 +355,8 @@ local function unload_service(identifier)
     SERVICES_ROUTINES[identifier] = nil
     SERVICES_STOP_CALLBACKS[identifier] = nil
     SERVICES_STATUS[identifier] = nil
+    SERVICES_READING_LOGS[identifier] = nil
+    SERVICES_LOG_CALLBACKS[identifier] = nil
 end
 
 
@@ -399,8 +406,16 @@ local function answer_calls_to_log(...)
         if SERVICES_LOG_FILES[CURRENT_SERVICE] == nil then
             return false, "service #"..CURRENT_SERVICE.." is unknown or not running"
         end
-        SERVICES_LOG_FILES[CURRENT_SERVICE].write(os.time()..", "..os.day()..", "..textutils.serialise("["..DISPLAY_NAME.."] "..message).."\n")
+        local full_message = "day "..os.day()..": "..textutils.formatTime(os.time())..", "..textutils.serialise("["..DISPLAY_NAME.."] "..message)
+        SERVICES_LOG_FILES[CURRENT_SERVICE].write(full_message.."\n")
         SERVICES_LOG_FILES[CURRENT_SERVICE].flush()
+        SERVICES_LAST_LOG = full_message
+        if SERVICES_READING_LOGS[CURRENT_SERVICE] > 0 then
+            for _, cb in ipairs(SERVICES_LOG_CALLBACKS[CURRENT_SERVICE]) do
+                cb()
+            end
+        end
+        SERVICES_LAST_LOG = nil
         return true
     end
 end
@@ -573,6 +588,60 @@ end
 ---Answers the system calls to services.read_logs.
 local function answer_calls_to_read_logs(...)
     local args = table.pack(...)
+    if #args ~= 1 then
+        return false, "expected exactly one argument, got "..#args
+    else
+        local identifier = args[1]      ---@type integer | Service
+        if type(identifier) == "Service" then
+            identifier = identifier.identifier
+        end
+        if type(identifier) ~= "number" then
+            return false, "bad argument #1: integer or Service expected, got '"..type(identifier).."'"
+        end
+        if SERVICES[identifier] == nil then
+            return false, "unknown service identifier: "..identifier
+        end
+        local next_logs = {}     ---@type string[]
+        SERVICES_READING_LOGS[identifier] = SERVICES_READING_LOGS[identifier] + 1
+        local callback_identifier = #SERVICES_LOG_CALLBACKS[identifier] + 1
+        local function clean_up()
+            SERVICES_READING_LOGS[identifier] = SERVICES_READING_LOGS[identifier] - 1
+            SERVICES_LOG_CALLBACKS[identifier][callback_identifier] = nil
+        end
+        print("Now, "..SERVICES_READING_LOGS[identifier].." are reading logs for service #"..identifier)
+        local awaitable, complete = syscall.await_gen(
+            function ()
+                return #next_logs > 0 or SERVICES_STATUS[identifier] == services.STATUS.DISABLED
+            end,
+            function ()
+                if #next_logs == 0 then
+                    clean_up()
+                    return true, nil
+                else
+                    return true, table.remove(next_logs, 1)
+                end
+            end,
+            true,
+            function ()
+                table.insert(next_logs, SERVICES_LAST_LOG)
+            end,
+            clean_up
+        )
+        SERVICES_LOG_CALLBACKS[identifier][callback_identifier] = complete
+
+        if kernel.panic_pcall("fs.exists", fs.exists, SERVICES_LOGS..identifier..".log") then
+            local file = kernel.panic_pcall("fs.open", fs.open, SERVICES_LOGS..identifier..".log", "r")
+            if file == nil then
+                kernel.panic("could not open log file for service #"..identifier)
+            end
+            for line in file.readLine do
+                table.insert(next_logs, line)
+            end
+            file.close()
+        end
+
+        return true, awaitable
+    end
 end
 
 ---Answers the system calls to services.reload.
@@ -596,7 +665,7 @@ local function answer_calls_to_reload(...)
         end
         local filepath = SERVICES_FILEPATHS[identifier]
         unload_service(identifier)
-        local ok, err = load_service(filepath, identifier)
+        local ok, err = load_service(tostring(filepath), identifier)
         if not ok then
             return false, err
         end
@@ -619,7 +688,7 @@ local function main()
     syscall.affect_routine(services.status, answer_calls_to_status)
     syscall.affect_routine(services.enable, answer_calls_to_enable)
     syscall.affect_routine(services.disable, answer_calls_to_disable)
-    syscall.affect_routine(services.get_logs, answer_calls_to_read_logs)
+    syscall.affect_routine(services.read_logs, answer_calls_to_read_logs)
     syscall.affect_routine(services.reload, answer_calls_to_reload)
 
     kernel.mark_routine_ready()

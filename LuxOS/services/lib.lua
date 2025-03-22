@@ -363,28 +363,27 @@ end
 
 
 
-services.get_logs = syscall.new(
+services.read_logs = syscall.new(
     "services.get_logs",
-    ---Returns the logs of the service with the given identifier.
+    ---Returns the logs of the service with the given identifier. Returns a function that returns the next log entry each time it is called. Blocks if the service is still running and all logs have been read. Return nil when all logs have been read and the service is stopped.
     ---@param identifier integer | Service The service identifier. Can also be a Service object.
-    ---@return {[number]: string} logs The logs of the service a table of logs indexed by time.
+    ---@return fun(): string? logs_reader The logs of the service as a function that returns the next log entry.
     function (identifier)
         if type(identifier) == "Service" then
             identifier = identifier.identifier
         end
-        local ok, err = syscall.trampoline(identifier)
-        if ok then
-            return err
-        else
-            error(err, 2)
+        local ok, err_or_awaitable = syscall.trampoline(identifier)
+        if not ok then
+            error(err_or_awaitable, 2)
         end
+        return err_or_awaitable
     end
 )
 
 ---Enables the service associated with the Service object.
----@return {[number]: string} logs The logs of the service a table of logs indexed by time.
-function Service:get_logs()
-    return services.get_logs(self)
+---@return fun(): string logs_reader The logs of the service as a function that returns the next log entry.
+function Service:read_logs()
+    return services.read_logs(self)
 end
 
 
