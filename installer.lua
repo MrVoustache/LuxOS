@@ -3274,6 +3274,19 @@ services.reload = syscall.new(
 
 
 
+local services_metatable = table.copy(table)
+setmetatable(services, services_metatable)
+
+---Shortcut for creating a new Service object.
+---@return Service service The new service object.
+function services_metatable:__call(...)
+    return Service:new(...)
+end
+
+
+
+
+
 return {
     services = services
 }]],
