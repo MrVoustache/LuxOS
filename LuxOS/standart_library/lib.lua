@@ -29,6 +29,20 @@ end
 
 
 
+---Returns a copy of the table.
+---@return table The copy of the table.
+function table:copy()
+    local cp = {}
+    for k, v in pairs(self) do
+        cp[k] = v
+    end
+    return cp
+end
+
+
+
+
+
 return {
     Path = Path,
     Application = Application
