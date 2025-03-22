@@ -193,21 +193,27 @@ local function run_everything()
             libraries[name] = lib
         end
     end
-
     for package_name, routine_path in pairs(routines) do
-        local routine_main = kernel.panic_pcall("dofile", dofile, routine_path)
+        local routine_main, routine_priority = kernel.panic_pcall("dofile", dofile, routine_path)
         if type(routine_main) ~= "function" then
             kernel.panic("Routine loader of package '"..package_name.."' did not return a function.'")
         end
+        if routine_priority == nil then
+            routine_priority = 0
+        end
+        if type(routine_priority) ~= "number" then
+            kernel.panic("Routine loader of package '"..package_name.."' returned a non-number priority.")
+        end
         local coro = coroutine.create(routine_main)
-        kernel.register_routine(package_name, coro)
+        kernel.register_routine(package_name, coro, routine_priority)
     end
 
     -- Start runtime : wait for all routines to be ready.
 
     local event = {}
     while true do
-        for name, coro in pairs(kernel.starting_routines("")) do
+        for i, coro_data in ipairs(kernel.starting_routines("")) do
+            local name, coro = coro_data[1], coro_data[2]
             -- print("Resuming starting routine '"..name.."' with '"..tostring(event[1]).."' event.")
             kernel.set_current_routine(name)
             local ok, err = coroutine.resume(coro, table.unpack(event))
@@ -229,7 +235,8 @@ local function run_everything()
     -- Normal runtime : everyone runs as if the world had no end
 
     while event[1] ~= "shutdown" do
-        for name, coro in pairs(kernel.get_routines_for_event(event[1])) do
+        for i, coro_data in ipairs(kernel.get_routines_for_event(event[1])) do
+            local name, coro = coro_data[1], coro_data[2]
             -- print("Resuming routine '"..name.."' with '"..tostring(event[1]).."' event.")
             kernel.set_current_routine(name)
             local ok, err = coroutine.resume(coro, table.unpack(event))
@@ -249,7 +256,8 @@ local function run_everything()
     local shutdown_info = {table.unpack(event, 2)}
 
     while true do
-        for name, coro in pairs(kernel.disconnecting_routines(event[1])) do
+        for i, coro_data in ipairs(kernel.disconnecting_routines(event[1])) do
+            local name, coro = coro_data[1], coro_data[2]
             -- print("Resuming disconnecting routine '"..name.."' with '"..tostring(event[1]).."' event.")
             kernel.set_current_routine(name)
             local ok, err = coroutine.resume(coro, table.unpack(event))

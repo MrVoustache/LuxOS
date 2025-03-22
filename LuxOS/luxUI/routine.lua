@@ -86,4 +86,4 @@ local function run_shell()
 
 end
 
-return run_shell
+return run_shell, 1

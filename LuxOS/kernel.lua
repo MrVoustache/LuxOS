@@ -121,7 +121,9 @@ end
 
 
 
-local routine_coroutines = {}   ---@type {[string] : thread}
+local routine_coroutines = {}   ---@type [string, thread][]
+local routine_names = {}        ---@type {[string] : thread}
+local routines_priority = {}    ---@type {[string] : integer}
 local current_routine = nil     ---@type string?
 local routines_ready = {}       ---@type {[string] : boolean}
 local routines_offline = {}     ---@type {[string] : boolean}
@@ -130,7 +132,8 @@ local private_event = {}        ---@type {[string] : string}
 ---Register a new system routine. Only called by the main scheduler.
 ---@param name string The name of the coroutine.
 ---@param coro thread The coroutine object itself.
-function kernel.register_routine(name, coro)
+---@param priority integer The execution priority of the routine. The lower the number, the higher the priority. 0 is the highest priority.
+function kernel.register_routine(name, coro, priority)
     check_kernel_space_before_running()
     kernel.promote_coroutine(coro)
     for iname, icoro in pairs(routine_coroutines) do
@@ -138,9 +141,21 @@ function kernel.register_routine(name, coro)
             kernel.panic("Routine '"..name.."' has already been registered.")
         end
     end
-    routine_coroutines[name] = coro
     routines_ready[name] = false
     routines_offline[name] = false
+    routines_priority[name] = priority
+    routine_names[name] = coro
+    local ok = false
+    for i, coro_data in ipairs(routine_coroutines) do
+        if routines_priority[coro_data[1]] > priority then
+            table.insert(routine_coroutines, i, {name, coro})
+            ok = true
+            break
+        end
+    end
+    if not ok then
+        table.insert(routine_coroutines, {name, coro})
+    end
 end
 
 ---Sets the name of the currently running routine.
@@ -162,7 +177,7 @@ function kernel.current_routine()
 end
 
 ---Returns a dictionnary of all the existing routines.
----@return { [string]: thread } routines The existing routine, indexed by names.
+---@return [string, thread][] routines The existing routines, indexed by priority.
 function kernel.routines()
     check_kernel_space_before_running()
     return routine_coroutines
@@ -180,11 +195,11 @@ end
 
 ---Returns a table of the routines to run for a given event.
 ---@param event_name string The name of the event to get the routines for.
----@return {[string] : thread} routines The routines to run for the event.
+---@return [string, thread][] routines The routines to run for the event.
 function kernel.get_routines_for_event(event_name)
     check_kernel_space_before_running()
     if private_event[event_name] ~= nil then
-        return {[private_event[event_name]] = routine_coroutines[private_event[event_name]]}
+        return {{private_event[event_name], routine_names[private_event[event_name]]}}
     else
         return kernel.routines()
     end
@@ -220,16 +235,16 @@ end
 
 ---Returns an array of the routines that have yet to finish startup.
 ---@param event_name string The name of the event to get the routines for.
----@return {[string] : thread} not_ready The routines' coroutines to run to finish startup.
+---@return [string, thread][] not_ready The routines' coroutines to run to finish startup.
 function kernel.starting_routines(event_name)
     check_kernel_space_before_running()
     if private_event[event_name] ~= nil and not routines_ready[private_event[event_name]] then
-        return {[private_event[event_name]] = routine_coroutines[private_event[event_name]]}
+        return {{private_event[event_name], routine_names[private_event[event_name]]}}
     end
     local not_ready = {}
-    for name, ready in pairs(routines_ready) do
-        if not ready then
-            not_ready[name] = routine_coroutines[name]
+    for i, coro_data in ipairs(routine_coroutines) do
+        if not routines_ready[coro_data[1]] then
+            table.insert(not_ready, {coro_data[1], coro_data[2]})
         end
     end
     return not_ready
@@ -267,16 +282,16 @@ end
 
 ---Returns an array of the routines that have yet to finish shutting down.
 ---@param event_name string The name of the event to get the routines for.
----@return {[string] : thread} not_ready The routines' coroutines to run to finish shutdown.
+---@return [string, thread][] not_ready The routines' coroutines to run to finish shutdown.
 function kernel.disconnecting_routines(event_name)
     check_kernel_space_before_running()
     if private_event[event_name] ~= nil and not routines_offline[private_event[event_name]] then
-        return {[private_event[event_name]] = routine_coroutines[private_event[event_name]]}
+        return {{private_event[event_name], routine_names[private_event[event_name]]}}
     end
     local not_offline = {}
-    for name, offline in pairs(routines_offline) do
-        if not offline then
-            not_offline[name] = routine_coroutines[name]
+    for i, coro_data in ipairs(routine_coroutines) do
+        if not routines_offline[coro_data[1]] then
+            table.insert(not_offline, {coro_data[1], coro_data[2]})
         end
     end
     return not_offline

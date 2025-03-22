@@ -681,4 +681,4 @@ local function main()
 
 end
 
-return main
+return main, 1
