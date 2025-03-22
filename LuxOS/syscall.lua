@@ -50,8 +50,9 @@ local ongoing_calls = {}    ---@type string[] The ongoing system call stack.
 ---@param ... any
 ---@return any
 function SysCall:__call(...)
+    local args = table.pack(...)
     table.insert(ongoing_calls, self.name)
-    local res = {pcall(self.__user_func, ...)}
+    local res = {pcall(self.__user_func, table.unpack(args, 1, args.n))}
     local ok = table.remove(res, 1)
     local exiting_call = table.remove(ongoing_calls)
     if exiting_call ~= self.name then
@@ -85,7 +86,7 @@ function (syscall, err, ...)
         res = tostring({...})
     end
     if err == nil then
-        kernel.panic("Syscall '"..syscall.name.."' routine stopped unexpectedly when it received arguments : '"..res.."'", 2)
+        kernel.panic("Syscall '"..syscall.name.."' routine blocked when it received arguments : '"..res.."'", 2)
     else
         kernel.panic("Syscall '"..syscall.name.."' routine got an error when it received arguments : '"..res.."' :\n"..err, 2)
     end
@@ -126,21 +127,74 @@ function syscall.trampoline(...)
     -- end
 
     local ok, syscall_coro = coroutine.resume(syscall_routines[call_name])
+    local args = table.pack(...)
     if not ok then
         kernel.panic("Syscall '"..call_name.."' generating routine crashed: "..syscall_coro, 2)
     end
-    local res = {coroutine.resume(syscall_coro, ...)}
-    while true do
-        ok = table.remove(res, 1)
-        if not ok then
-            coroutine.resume(report_syscall_crash_coro, syscall_table[call_name], res[1], ...)
-        end
-        if coroutine.status(syscall_coro) == "dead" then
-            break
-        end
-        res = {coroutine.resume(syscall_coro, coroutine.yield())}
+    local res = {coroutine.resume(syscall_coro, table.unpack(args, 1, args.n))}
+    ok = table.remove(res, 1)
+    if not ok then
+        coroutine.resume(report_syscall_crash_coro, syscall_table[call_name], res[1], table.unpack(args, 1, args.n))
+    end
+    if coroutine.status(syscall_coro) ~= "dead" then
+        coroutine.resume(report_syscall_crash_coro, syscall_table[call_name], nil, table.unpack(args, 1, args.n))
     end
     return table.unpack(res)
+end
+
+
+
+
+
+---Creates an awaitable condition for syscalls to use when a syscall should block.
+---@generic R : any The return type of the awaitable
+---@param condition fun() : boolean The condition checking function. Returns true if the condition is met, false otherwise.
+---@param result fun() : boolean, R | string The result function. Should return true and any value on success and false plus an error message on error.
+---@param terminable boolean? If true, the awaitable breaks if a terminate event is received. Defaults to false.
+---@param pre_complete (fun():nil)? An optional function that will be called when the condition is complete.
+---@return fun() : boolean, R | string awaitable An awaitable function that will block until the condition is met and will return any value returned. Should be return by the trampoline.
+---@return fun() : nil completion A non-blocking function that should be called by the kernel when the condition should be checked.
+function syscall.await(condition, result, terminable, pre_complete)
+    check_kernel_space_before_running()
+    if terminable == nil then
+        terminable = false
+    end
+
+    local await_coro = coroutine.create(function ()
+        while not condition() do
+            local event = coroutine.yield()
+            if terminable and event == "terminate" then
+                return false, "terminated"
+            end
+        end
+        return result()
+    end)
+
+    kernel.promote_coroutine(await_coro)
+
+    local function awaitable()
+        local event = {}
+        while true do
+            local res = {coroutine.resume(await_coro, table.unpack(event))}
+            local ok = table.remove(res, 1)
+            if not ok then
+                kernel.panic("Awaitable syscall coroutine had an exception: "..res[1])
+            end
+            if coroutine.status(await_coro) == "dead" then
+                return table.unpack(res)
+            end
+            event = table.pack(coroutine.yield())
+        end
+    end
+
+    local function completion()
+        lux.make_tick()
+        if pre_complete ~= nil then
+            pre_complete()
+        end
+    end
+
+    return awaitable, completion
 end
 
 
@@ -172,7 +226,7 @@ function syscall.affect_routine(syscall, handler_func)
     end
 
     local function do_system_call(func, func_name)
-        local res = {pcall(func, table.unpack({coroutine.yield()}))}
+        local res = {pcall(func, coroutine.yield())}
         local ok = table.remove(res, 1)
         if not ok then
             kernel.panic("Syscall '"..func_name.."' crashed: "..res[1], 2)

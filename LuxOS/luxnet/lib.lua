@@ -11,8 +11,6 @@ _G.luxnet = {}      -- The LuxNet API. Allows you to communicate with other mach
 luxnet.LUXNET_PORT = 42      -- The port that LuxNet uses to communicate with other machines.
 luxnet.BROADCAST_ID = -1     -- The ID that represents a broadcast message. This is used to send messages to all machines.
 
-local check_kernel_space_before_running = kernel.check_kernel_space_before_running
-
 
 
 
@@ -26,6 +24,7 @@ local check_kernel_space_before_running = kernel.check_kernel_space_before_runni
 ---@field jumps integer The amount of jumps the message has done to reach the receiver.
 ---@field time_to_live integer The maximum number of jumps the message can do. Can be infinite.
 ---@field distance number The distance that the message has traveled.
+---@field frequency integer The frequency that the message was sent on.
 ---@field time_sent number The time when the message was sent.
 ---@field time_received number The time when the message was received.
 local Message = {}
@@ -36,11 +35,24 @@ Message.__name = "Message"
 
 
 ---Creates a new Message object.
----@param message {["sender"]: integer, ["receiver"]: integer, ["message"]: table | string | number | boolean | nil, ["protocol"]: string | nil, ["identifier"]: integer, ["jumps"]: integer, ["time_to_live"]: integer, ["distance"]: number, ["time_sent"]: number, ["time_received"]: number} The required parameters for creating a message.
+---@param message {["sender"]: integer, ["receiver"]: integer, ["message"]: table | string | number | boolean | nil, ["protocol"]: string | nil, ["identifier"]: integer, ["jumps"]: integer, ["time_to_live"]: integer, ["distance"]: number, ["frequency"]: integer, ["time_sent"]: number, ["time_received"]: number} The required parameters for creating a message.
 ---@return Message message The new message object.
 function Message:new(message)
     setmetatable(message, self)
     return message
+end
+
+
+function Message:__tostring()
+    local ok, message_str = pcall(textutils.serialize, self.message)
+    if not ok then
+        message_str = tostring(self.message)
+    end
+    local protocol = "nil"
+    if self.protocol ~= nil then
+        protocol = "'"..self.protocol.."'"
+    end
+    return "Message{sender=" .. self.sender .. ", receiver=" .. self.receiver .. ", message=" .. message_str .. ", protocol=" .. protocol .. ", identifier=" .. self.identifier .. ", jumps=" .. self.jumps .. ", time_to_live=" .. self.time_to_live .. ", distance=" .. self.distance .. ", frequency=" .. self.frequency .. ", time_sent=" .. self.time_sent .. ", time_received=" .. self.time_received .. "}"
 end
 
 
@@ -50,7 +62,9 @@ end
 ---@field receiver integer The ID of the receiver of the corresponding message.
 ---@field identifier integer The identifier of the corresponding message.
 ---@field jumps integer The amount of jumps that the corresponding message has done to reach the receiver.
+---@field time_to_live integer The remaining time_to_live. time_to_live + jumps = initial time_to_live.
 ---@field distance number The distance that the corresponding message has traveled to reach the receiver.
+---@field frequency integer The frequency that the corresponding message was sent on.
 ---@field time_sent number The time when the corresponding message was sent.
 ---@field time_received number The time when the corresponding message was received.
 local Response = {}
@@ -61,12 +75,71 @@ Response.__name = "Response"
 
 
 ---Creates a new Response object. Can only be called from kernel space.
----@param response {["sender"]: integer, ["receiver"]: integer, ["identifier"]: integer, ["jumps"]: integer, ["distance"]: number, ["time_sent"]: number, ["time_received"]: number} The required parameters for creating a response.
+---@param response {["sender"]: integer, ["receiver"]: integer, ["identifier"]: integer, ["jumps"]: integer, ["time_to_live"]: integer, ["distance"]: number, ["frequency"]: integer, ["time_sent"]: number, ["time_received"]: number} The required parameters for creating a response.
 ---@return Response response The new response object.
 function Response:new(response)
     setmetatable(response, self)
     return response
 end
+
+
+function Response:__tostring()
+    return "Response{sender=" .. self.sender .. ", receiver=" .. self.receiver .. ", identifier=" .. self.identifier .. ", jumps=" .. self.jumps .. ", time_to_live=" .. self.time_to_live .. ", distance=" .. self.distance .. ", frequency=" .. self.frequency .. ", time_sent=" .. self.time_sent .. ", time_received=" .. self.time_received .. "}"
+end
+
+
+
+
+
+luxnet.enable_frequency = syscall.new(
+    "luxnet.enable_frequency",
+    ---Enables the frequency of the machine for LuxNet. Each call to enable_frequency should be matched with a call to disable_frequency.
+    ---@param frequency integer The frequency to enable.
+    function (frequency)
+        local ok, err = syscall.trampoline(frequency)
+        if ok then
+            return
+        else
+            error(err, 2)
+        end
+    end
+)
+
+
+
+
+
+luxnet.disable_frequency = syscall.new(
+    "luxnet.disable_frequency",
+    ---Disables the frequency of the machine for LuxNet.
+    ---@param frequency integer The frequency to disable.
+    function (frequency)
+        local ok, err = syscall.trampoline(frequency)
+        if ok then
+            return
+        else
+            error(err, 2)
+        end
+    end
+)
+
+
+
+
+
+luxnet.active_frequencies = syscall.new(
+    "luxnet.active_frequencies",
+    ---Returns a list of all active frequencies.
+    ---@return integer[] frequencies A list of all active frequencies.
+    function ()
+        local ok, err_or_frequencies = syscall.trampoline()
+        if ok then
+            return err_or_frequencies
+        else
+            error(err_or_frequencies, 2)
+        end
+    end
+)
 
 
 
@@ -77,10 +150,20 @@ luxnet.send = syscall.new(
     ---Sends a message to another machine.
     ---@param receiver integer The ID of the receiver.
     ---@param message table | string | number | boolean | nil The message to send.
-    ---@param protocol string | nil The protocol to use to send the message.
-    ---@return Response | false response The response from the receiver, if any.
-    function (receiver, message, protocol)
-        local ok, err_or_response = syscall.trampoline(receiver, message, protocol)
+    ---@param protocol string? The protocol to use to send the message.
+    ---@param time_to_live integer? The maximum number of jumps the message can do. Can be infinite.
+    ---@param frequency integer? The frequency to use to send the message.
+    ---@param timeout number? The time to wait for a response before giving up.
+    ---@return Response | false response The response from the receiver, if any, or false if the receiver didn't acknowledge the message.
+    function (receiver, message, protocol, time_to_live, frequency, timeout)
+        local ok, err_or_awaitable = syscall.trampoline(receiver, message, protocol, time_to_live, frequency, timeout)
+        if not ok then
+            error(err_or_awaitable, 2)
+        end
+        if err_or_awaitable == false then
+            return false
+        end
+        local ok, err_or_response = err_or_awaitable()
         if ok then
             if err_or_response == false then
                 return false
@@ -101,9 +184,11 @@ luxnet.broadcast = syscall.new(
     "luxnet.broadcast",
     ---Sends a message to all machines.
     ---@param message table | string | number | boolean | nil The message to send.
-    ---@param protocol string | nil The protocol to use to send the message.
-    function (message, protocol)
-        local ok, err = syscall.trampoline(message, protocol)
+    ---@param protocol string? The protocol to use to send the message.
+    ---@param time_to_live integer? The maximum number of jumps the message can do. Can be infinite.
+    ---@param frequency integer? The frequency to use to send the message.
+    function (message, protocol, time_to_live, frequency)
+        local ok, err = syscall.trampoline(message, protocol, time_to_live, frequency)
         if ok then
             return
         else
@@ -116,99 +201,125 @@ luxnet.broadcast = syscall.new(
 
 
 
-luxnet.set_response_timeout = syscall.new(
-    "luxnet.set_response_timeout",
-    ---Sets the time to wait for a response before giving up.
-    ---@param timeout number The time to wait for a response before giving up.
-    function (timeout)
-        local ok, err = syscall.trampoline(timeout)
-        if ok then
-            return
-        else
-            error(err, 2)
+luxnet.receive = syscall.new(
+    "luxnet.receive",
+    --- Receives a message from another machine.
+    ---@param sender integer[] | integer | nil The ID(s) of the sender(s) to receive a message from. Can be a table of integers, a single integer, or nil to receive from any sender.
+    ---@param protocol string? An optional protocal to filter messages by.
+    ---@param timeout number? The time to wait for a message before giving up. Defaults to no timeout.
+    ---@param ferquency integer? The frequency to receive the message on. Defaults to LUXNET frequency.
+    ---@return Message? message The message received, or nil if the timeout was reached.
+    function (sender, protocol, timeout, ferquency)
+        local ok, err_or_awaitable = syscall.trampoline(sender, protocol, timeout, ferquency)
+        if not ok then
+            error(err_or_awaitable, 2)
         end
-    end
-)
-
-
-
-
-
---- Receives a message from another machine.
----@param protocol string | nil An optional protocal to filter messages by.
----@param timeout number | nil The time to wait for a message before giving up. Defaults to no timeout.
----@return Message | nil message The message received, or nil if the timeout was reached.
-function luxnet.receive(protocol, timeout)
-    if protocol ~= nil and type(protocol) ~= "string" then
-        error("bad argument #1 (expected string, got " .. type(protocol) .. ")", 2)
-    end
-    if timeout ~= nil and type(timeout) ~= "number" then
-        error("bad argument #2 (expected number, got " .. type(timeout) .. ")", 2)
-    end
-    if timeout ~= nil and timeout < 0 then
-        error("bad argument #2 (expected number >= 0, got " .. timeout .. ")", 2)
-    end
-    local timer
-    if timeout ~= nil then
-        timer = os.startTimer(timeout)
-    end
-    while true do
-        local event = {coroutine.yield()}
-        if event[1] == "luxnet_message" or event[1] == "luxnet_broadcast" then
-            local message = event[2]
-            if protocol == nil or message.protocol == protocol then
-                return Message:new(message)
+        local ok, err_or_message = err_or_awaitable()
+        if ok then
+            if err_or_message == nil then
+                return nil
+            else
+                return Message:new(err_or_message)
             end
-        elseif event[1] == "terminate" then
-            error("terminated", 2)
-        elseif event[1] == "timer" and event[2] == timer then
-            return nil
+        else
+            error(err_or_message, 2)
         end
     end
+)
+
+
+
+
+
+---@class LuxNetContext A class that holds a set of LuxNet settings and wraps system calls.
+---@field frequency integer The frequency that the context is using.
+---@field send_timeout number The time to wait for a response before giving up.
+---@field receive_timeout number? The time to wait for a message before giving up.
+---@field time_to_live integer? The maximum number of jumps the message can do. Can be infinite.
+---@field protocol string? The protocol to use to send the message.
+local LuxNetContext = {}
+luxnet.LuxNetContext = LuxNetContext
+
+LuxNetContext.__index = LuxNetContext
+LuxNetContext.__name = "LuxNetContext"
+
+
+---Creates a new LuxNetContext object.
+---@param frequency integer? The frequency to use. Defaults to LUXNET frequency.
+---@param send_timeout number? The time to wait for a response before giving up. Defaults to 5 seconds.
+---@param receive_timeout number? The time to wait for a message before giving up. Defaults to no timeout.
+---@param time_to_live integer? The maximum number of jumps the message can do. Can be infinite. Defaults to infinite.
+---@param protocol string? The protocol to use to send the message. Defaults to nil.
+---@return LuxNetContext context The new LuxNetContext object.
+function LuxNetContext:new(frequency, send_timeout, receive_timeout, time_to_live, protocol)
+    local context = {
+        frequency = frequency or luxnet.LUXNET_PORT,
+        send_timeout = send_timeout or 5,
+        receive_timeout = receive_timeout,
+        time_to_live = time_to_live,
+        protocol = protocol,
+    }
+    setmetatable(context, self)
+    luxnet.enable_frequency(context.frequency)
+    return context
 end
 
 
+function LuxNetContext:__tostring()
+    return "LuxNetContext{frequency=" .. self.frequency .. ", send_timeout=" .. self.send_timeout .. ", receive_timeout=" .. self.receive_timeout .. ", time_to_live=" .. self.time_to_live .. ", protocol=" .. self.protocol .. ", recveive_broadcasts=" .. tostring(self.recveive_broadcasts) .. "}"
+end
 
+---Sends a message to another machine.
+---@param receiver integer The ID of the receiver.
+---@param message table | string | number | boolean | nil The message to send.
+---@return Response | false response The response from the receiver, if any, or false if the receiver didn't acknowledge the message.
+function LuxNetContext:send(receiver, message)
+    return luxnet.send(receiver, message, self.protocol, self.time_to_live, self.frequency, self.send_timeout)
+end
 
+---Broadcasts a message to all machines.
+---@param message table | string | number | boolean | nil The message to send.
+function LuxNetContext:broadcast(message)
+    return luxnet.broadcast(message, self.protocol, self.time_to_live, self.frequency)
+end
 
---- Receives a message from a specific machine.
----@param sender integer The ID of the sender to receive a message from.
----@param protocol string | nil An optional protocal to filter messages by.
----@param timeout number | nil The time to wait for a message before giving up. Defaults to no timeout.
----@return Message | nil message The message received, or nil if the timeout was reached.
-function luxnet.receive_from(sender, protocol, timeout)
-    if type(sender) ~= "number" then
-        error("bad argument #1 (expected number, got " .. type(sender) .. ")", 2)
-    end
-    if protocol ~= nil and type(protocol) ~= "string" then
-        error("bad argument #2 (expected string, got " .. type(protocol) .. ")", 2)
-    end
-    if timeout ~= nil and type(timeout) ~= "number" then
-        error("bad argument #3 (expected number, got " .. type(timeout) .. ")", 2)
-    end
-    if sender < 0 or sender > 65535 then
-        error("bad argument #1 (expected number in range 0-65535, got " .. sender .. ")", 2)
-    end
-    if timeout ~= nil and timeout < 0 then
-        error("bad argument #3 (expected number >= 0, got " .. timeout .. ")", 2)
-    end
-    local timer
-    if timeout ~= nil then
-        timer = os.startTimer(timeout)
-    end
-    while true do
-        local event = {coroutine.yield()}
-        if event[1] == "luxnet_message" or event[1] == "luxnet_broadcast" then
-            local message = event[2]
-            if message.sender == sender and (protocol == nil or message.protocol == protocol) then
-                return Message:new(message)
-            end
-        elseif event[1] == "terminate" then
-            error("terminated", 2)
-        elseif event[1] == "timer" and event[2] == timer then
-            return nil
-        end
-    end
+---Receives a message from another machine.
+---@param sender integer[] | integer | nil The ID(s) of the sender(s) to receive a message from. Can be a table of integers, a single integer, or nil to receive from any sender.
+---@return Message? message The message received, or nil if the timeout was reached.
+function LuxNetContext:receive(sender)
+    return luxnet.receive(sender, self.protocol, self.receive_timeout, self.frequency)
+end
+
+---Sets the context frequency.
+---@param frequency integer The frequency to use.
+function LuxNetContext:set_frequency(frequency)
+    luxnet.disable_frequency(self.frequency)
+    self.frequency = frequency
+    luxnet.enable_frequency(frequency)
+end
+
+---Sets the context send timeout.
+---@param send_timeout number The time to wait for a response before giving up.
+function LuxNetContext:set_send_timeout(send_timeout)
+    self.send_timeout = send_timeout
+end
+
+---Sets the context receive timeout.
+---@param receive_timeout number? The time to wait for a message before giving up. Can be nil for no timeout.
+function LuxNetContext:set_receive_timeout(receive_timeout)
+    self.receive_timeout = receive_timeout or math.huge
+end
+
+---Sets the context time to live.
+---@param time_to_live integer? The maximum number of jumps the message can do. Can be nil for infinite.
+function LuxNetContext:set_time_to_live(time_to_live)
+    self.time_to_live = time_to_live
+end
+
+---Sets the context protocol.
+---@param protocol string? The protocol to use to send the message. Can be nil for no protocol.
+function LuxNetContext:set_protocol(protocol)
+    self.protocol = protocol
 end
 
 

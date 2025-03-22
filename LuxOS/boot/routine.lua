@@ -98,7 +98,7 @@ local function ensure_boot(force)
 end
 
 local function answer_calls_to_get_boot_sequence(...)
-    local args = {...}
+    local args = table.pack(...)
     if #args > 0 then
         return false, "syscall got "..tostring(#args).." parameters, expected 0"
     else
@@ -111,7 +111,7 @@ local function answer_calls_to_get_boot_sequence(...)
 end
 
 local function answer_calls_to_set_boot_sequence(...)
-    local args = {...}
+    local args = table.pack(...)
     for index, file in ipairs(args) do
         if type(file) ~= "string" then
             return false, "bad argument #"..tostring(index)..": expected string, got '"..type(file).."'"

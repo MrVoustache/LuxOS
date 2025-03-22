@@ -19,7 +19,8 @@ local SERVICES_ON_RETURN = {}                           ---@type {[integer]: ON_
 local SERVICES_FILEPATHS = {}                           ---@type {[integer]: Path} The table of Paths to the services script files.
 local SERVICES_ROUTINES = {}                            ---@type {[integer]: thread} A table that contains a kernel coroutine that handles each running service.
 local SERVICES_LOG_FILES = {}                           ---@type {[integer]: handle} The table of handles to log files for all enabled services.
-local SERVICES_STOP_ROUTINES = {}                       ---@type {[integer]: thread[]} A routine for each service being stopped. Will be resumed when the service stops.
+local SERVICES_STOP_CALLBACKS = {}                      ---@type {[integer]: (fun():nil)[]} A routine for each service being stopped. Will be resumed when the service stops.
+local SERVICE_STOP_STATUS = true                        ---@type boolean Indicates if the service that just stopped did stop gracefully.
 local SERVICES_STATUS = {}                              ---@type {[integer]: STATUS} The status of each service.
 local CURRENT_SERVICE = nil                             ---@type integer? The currently running service.
 local DISPLAY_NAME = "service manager"                  ---@type string The name to display on logs.
@@ -134,7 +135,7 @@ local function run_service(identifier)
         DISPLAY_NAME = SERVICES_NAMES[identifier]
         if ok then
             while true do
-                if #SERVICES_STOP_ROUTINES[identifier] > 0 then
+                if #SERVICES_STOP_CALLBACKS[identifier] > 0 then
                     disable = true
                     break
                 end
@@ -196,9 +197,11 @@ local function run_service(identifier)
             end
         end
         
-        while #SERVICES_STOP_ROUTINES[identifier] > 0 do        -- Signal all awaiting stop routines of the termination of the service
-            coroutine.resume(SERVICES_STOP_ROUTINES[identifier][#SERVICES_STOP_ROUTINES[identifier]], ok)
-            table.remove(SERVICES_STOP_ROUTINES[identifier])
+        SERVICE_STOP_STATUS = ok
+        while #SERVICES_STOP_CALLBACKS[identifier] > 0 do        -- Signal all awaiting stop routines of the termination of the service
+            local cb = SERVICES_STOP_CALLBACKS[identifier][#SERVICES_STOP_CALLBACKS[identifier]]
+            table.remove(SERVICES_STOP_CALLBACKS[identifier], #SERVICES_STOP_CALLBACKS[identifier])
+            cb()
         end
 
         coro = nil
@@ -311,7 +314,7 @@ local function load_service(filepath, identifier)
     SERVICES_ON_RETURN[identifier] = service.on_return
     SERVICES_FILEPATHS[identifier] = Path:new(filepath)
     SERVICES_ROUTINES[identifier] = coroutine.create(run_service)
-    SERVICES_STOP_ROUTINES[identifier] = {}
+    SERVICES_STOP_CALLBACKS[identifier] = {}
     SERVICES_STATUS[identifier] = services.STATUS.DISABLED
     kernel.promote_coroutine(SERVICES_ROUTINES[identifier])
     coroutine.resume(SERVICES_ROUTINES[identifier], identifier)
@@ -345,7 +348,7 @@ local function unload_service(identifier)
     SERVICES_ON_RETURN[identifier] = nil
     SERVICES_FILEPATHS[identifier] = nil
     SERVICES_ROUTINES[identifier] = nil
-    SERVICES_STOP_ROUTINES[identifier] = nil
+    SERVICES_STOP_CALLBACKS[identifier] = nil
     SERVICES_STATUS[identifier] = nil
 end
 
@@ -371,33 +374,9 @@ end
 
 ---Internal function that stops the service with the given identifier.
 ---@param identifier integer The service identifier.
----@return boolean ok Indicates if the service was stopped successfully.
----@return string? error The error message if an error occured.
-local function stop_service(identifier)
-    local ok, err
-
-    local function await_stop()
-        while true do
-            local event = {coroutine.yield()}
-            if event[1] == "terminate" then
-                ok = false
-                err = "terminated"
-                return
-            elseif type(event[1]) == "boolean" then
-                lux.tick()
-                ok = event[1]
-                err = "service #"..identifier.." failed to stop after timeout"
-                return
-            end
-        end
-    end
-    local await_stop_coro = coroutine.create(await_stop)
-
-    table.insert(SERVICES_STOP_ROUTINES[identifier], await_stop_coro)
-    while coroutine.status(await_stop_coro) ~= "dead" do
-        coroutine.resume(await_stop_coro, coroutine.yield())
-    end
-    return ok, err
+---@param callback fun():nil A function to call when the service has stopped.
+local function stop_service(identifier, callback)
+    table.insert(SERVICES_STOP_CALLBACKS[identifier], callback)
 end
 
 
@@ -406,7 +385,7 @@ end
 
 ---Answers the system calls to services.log.
 local function answer_calls_to_log(...)
-    local args = {...}
+    local args = table.pack(...)
     if #args ~= 1 then
         return false, "expected exactly one argument, got "..#args
     else
@@ -428,7 +407,7 @@ end
 
 ---Answers the system calls to services.enumerate.
 local function answer_calls_to_enumerate(...)
-    local args = {...}
+    local args = table.pack(...)
     if #args > 0 then
         return false, "expected no arguments, got "..#args
     else
@@ -452,7 +431,7 @@ end
 
 ---Answers the system calls to services.install.
 local function answer_calls_to_install(...)
-    local args = {...}
+    local args = table.pack(...)
     if #args ~= 1 then
         return false, "expected exactly one argument, got "..#args
     else
@@ -479,7 +458,7 @@ end
 
 ---Answers the system calls to services.uninstall.
 local function answer_calls_to_uninstall(...)
-    local args = {...}
+    local args = table.pack(...)
     if #args ~= 1 then
         return false, "expected exactly one argument, got "..#args
     else
@@ -503,7 +482,7 @@ end
 
 ---Answers the system calls to services.status.
 local function answer_calls_to_status(...)
-    local args = {...}
+    local args = table.pack(...)
     if #args ~= 1 then
         return false, "expected exactly one argument, got "..#args
     else
@@ -523,7 +502,7 @@ end
 
 ---Answers the system calls to services.enable.
 local function answer_calls_to_enable(...)
-    local args = {...}
+    local args = table.pack(...)
     if #args ~= 1 then
         return false, "expected exactly one argument, got "..#args
     else
@@ -551,7 +530,7 @@ end
 
 ---Answers the system calls to services.disable.
 local function answer_calls_to_disable(...)
-    local args = {...}
+    local args = table.pack(...)
     if #args ~= 1 then
         return false, "expected exactly one argument, got "..#args
     else
@@ -568,27 +547,37 @@ local function answer_calls_to_disable(...)
         if not SERVICES[identifier] then
             return false, "service #"..identifier.." is already disabled"
         end
-        local ok, err = stop_service(identifier)
-        if not ok then
-            return false, err
-        end
-        disable_service(identifier)
-        if ok then
-            return true
-        else
-            return false, err
-        end
+        local ok = nil
+        local awaitable, complete = syscall.await(
+            function ()
+                return ok ~= nil
+            end,
+            function ()
+                if ok then
+                    disable_service(identifier)
+                else
+                    return false, "service encountered a problem while stopping"
+                end
+                return true, nil
+            end,
+            true,
+            function ()
+                ok = SERVICE_STOP_STATUS
+            end
+        )
+        stop_service(identifier, complete)
+        return true, awaitable
     end
 end
 
 ---Answers the system calls to services.read_logs.
 local function answer_calls_to_read_logs(...)
-    local args = {...}
+    local args = table.pack(...)
 end
 
 ---Answers the system calls to services.reload.
 local function answer_calls_to_reload(...)
-    local args = {...}
+    local args = table.pack(...)
     if #args ~= 1 then
         return false, "expected exactly one argument, got "..#args
     else
@@ -667,12 +656,9 @@ local function main()
 
     -- Shutdown time : shutdown all services
 
-    local stop_coroutines = {}
     for identifier, enabled in pairs(SERVICES) do
         if enabled then
-            local coro = coroutine.create(stop_service)
-            table.insert(stop_coroutines, coro)
-            coroutine.resume(coro, identifier)
+            stop_service(identifier, function () end)
         end
     end
 
@@ -685,14 +671,6 @@ local function main()
                 coroutine.resume(service_routine, table.unpack(event))
             end
             if service_routine ~= nil and SERVICES_STATUS[identifier] ~= services.STATUS.DISABLED then
-                remaining = true
-            end
-        end
-        for _, stop_coro in ipairs(stop_coroutines) do
-            if coroutine.status(stop_coro) ~= "dead" then
-                coroutine.resume(stop_coro, table.unpack(event))
-            end
-            if coroutine.status(stop_coro) ~= "dead" then
                 remaining = true
             end
         end

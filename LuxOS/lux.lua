@@ -39,10 +39,8 @@ end
 
 ---This function creates a "tick" event without waiting for it to happen.
 function lux.make_tick()
-    if CURRENT_TICK == NEXT_TICK then
-        NEXT_TICK = NEXT_TICK + 1
-        os.queueEvent("tick")
-    end
+    NEXT_TICK = NEXT_TICK + 1
+    os.queueEvent("tick")
 end
 
 lux.INSTALLER_CODE = "68i8QBxE"

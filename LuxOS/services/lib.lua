@@ -17,7 +17,7 @@ services.log = syscall.new(
     ---Logs a message to the service journal.
     ---@param ... string The message to log in the journal. Converts all parameters to string (pretty printed if possible) and concatenates them.
     function (...)
-        local args = {...}
+        local args = table.pack(...)
         local message = ""
         
         ---Convert an argument to a string.
@@ -325,7 +325,11 @@ services.disable = syscall.new(
         if type(identifier) == "Service" then
             identifier = identifier.identifier
         end
-        local ok, err = syscall.trampoline(identifier)
+        local ok, err_or_awaitable = syscall.trampoline(identifier)
+        if not ok then
+            error(err_or_awaitable, 2)
+        end
+        local ok, err = err_or_awaitable()
         if ok then
             return
         else

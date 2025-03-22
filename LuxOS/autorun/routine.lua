@@ -105,7 +105,7 @@ end
 
 ---Answers the system calls to autorun.register.
 local function answer_calls_to_register(...)
-    local args = {...}
+    local args = table.pack(...)
     if #args < 1 then
         return false, "syscall got "..tostring(#args).." parameters, expected at least 1"
     else
@@ -127,7 +127,7 @@ end
 
 ---Answers the system calls to autorun.unregister.
 local function answer_calls_to_unregister(...)
-    local args = {...}
+    local args = table.pack(...)
     if #args ~= 1 then
         return false, "syscall got "..tostring(#args).." parameters, expected 1"
     else
@@ -147,7 +147,7 @@ end
 
 ---Answers the system calls to autorun.enumerate.
 local function answer_calls_to_enumerate(...)
-    local args = {...}
+    local args = table.pack(...)
     if #args > 0 then
         return false, "syscall got "..tostring(#args).." parameters, expected 0"
     else
@@ -160,7 +160,7 @@ local function answer_calls_to_enumerate(...)
 end
 
 local function answer_calls_to_running_startup_scripts(...)
-    local args = {...}
+    local args = table.pack(...)
     if #args > 0 then
         return false, "syscall got "..tostring(#args).." parameters, expected 0"
     else
